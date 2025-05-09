@@ -320,7 +320,7 @@ async function submitMediaToAI(imagePath, category, updateStatusImmediately = tr
     formData.append('category', category);
     
     // AI 서버 엔드포인트 선택 (카테고리별 다른 엔드포인트 사용)
-    const endpoint = category === 'animal' ? 'api/detect-animals' : 'api/detect-face';
+    const endpoint = category === 'animal' ? 'api/detect-animals' : 'api/detect-human';
     
     // 분석 요청
     const response = await axios.post(`${AI_SERVER_URL}/${endpoint}`, formData, {
