@@ -40,7 +40,7 @@ def draw_boxes(image_path, results, save_path):
 # ======================
 # Route: Detect objects
 # ======================
-@app.post("/api/detect-objects")
+@app.post("/api/detect-animals")
 async def detect_objects(
     file: UploadFile = File(...),
     job_id: str = Form(...)
