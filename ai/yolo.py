@@ -40,7 +40,6 @@ def main():
     logger.info(f"==== TRAIN START (SGD, 1 epoch) ====")
     model = YOLO(args.weights)
 
-    # 학습: 1 epoch, SGD, lr0=0.01, momentum=0.9
     model.train(
         data=args.data,
         epochs=args.epochs,
@@ -57,26 +56,11 @@ def main():
     )
     logger.info("학습 완료")
 
-    # train 셋 그대로 평가
-    logger.info("==== VALIDATION ON TRAIN SET ====")
     val_results = model.val(
         data=args.data,
         imgsz=args.imgsz,
         device=args.device,
-        split="train"
     )
-
-    # 평가 지표 추출
-    metrics = {
-        'precision':   val_results.box.p,
-        'recall':      val_results.box.r,
-        'mAP50':       val_results.box.map50,
-        'mAP50-95':    val_results.box.map50_95,
-        'speed':       val_results.speed
-    }
-    with open(args.val_out, 'w', encoding='utf-8') as vf:
-        json.dump(metrics, vf, ensure_ascii=False, indent=2)
-    logger.info(f"평가 결과 저장: {args.val_out}")
 
 if __name__ == "__main__":
     main()
