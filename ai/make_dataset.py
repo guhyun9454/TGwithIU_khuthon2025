@@ -74,10 +74,11 @@ for species, cls_id in CLASS_MAP.items():
             w, h = img["width"], img["height"]
             lines = []
             for ann in anns:
-                if ann["bbox"] == []:
+                try:
+                    (x1, y1), (x2, y2) = ann["bbox"]
+                except:
                     print(f"bbox 누락: {img_name} (JSON: {json_path})")
                     continue
-                (x1, y1), (x2, y2) = ann["bbox"]
                 cx = ((x1 + x2) / 2) / w
                 cy = ((y1 + y2) / 2) / h
                 bw = (x2 - x1) / w
