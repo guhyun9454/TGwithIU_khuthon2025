@@ -1,4 +1,4 @@
-e('express')
+const express = require('express')
 const app = express()
 const cors = require('cors');                           //서버간 통신 모듈
 app.use(cors())
