@@ -40,7 +40,8 @@ const MEDIA_PATH = path.join(__dirname, 'media');
 // 미디어 폴더가 없으면 생성
 if (!fs.existsSync(MEDIA_PATH)) {
     fs.mkdirSync(MEDIA_PATH);
-    fs.mkdirSync(path.join(MEDIA_PATH, 'images'));
+    fs.mkdirSync(path.join(MEDIA_PATH, 'animals')); // 동물 감지용 폴더
+    fs.mkdirSync(path.join(MEDIA_PATH, 'face'));    // 사람 감지용 폴더
 }
 
 
@@ -61,36 +62,65 @@ function startMediaMonitoring() {
   console.log('미디어 모니터링이 시작되었습니다.');
 }
 
-// 새 미디어 파일 스캔 및 처리
+// 새 미디어 파일 스캔 및 폴더별 순서대로 처리
 async function scanAndProcessNewMedia() {
   try {
-    // 처리된 파일 목록 (이미 분석 요청한 파일들)
+    // 처리된 파일 목록
     const processedFiles = database.getProcessedMediaFiles();
     
-    // 현재 폴더 내 모든 파일 스캔
-    await database.scanMediaFiles();
-    const allFiles = database.getMediaFiles();
-    
-    // 새 이미지 파일 찾기
-    const newImageFiles = allFiles.images.filter(img => !processedFiles.includes(img.id));
-    
-    // 새 이미지 파일 처리
-    for (const img of newImageFiles) {
-      console.log(`새 이미지 발견: ${img.id}`);
-      await submitMediaToAI(img.id);
+    // 1. animals 폴더 처리 (먼저 처리)
+    const animalsPath = path.join(MEDIA_PATH, 'animals');
+    if (fs.existsSync(animalsPath)) {
+      console.log('animals 폴더 이미지 처리 시작...');
+      const animalFiles = fs.readdirSync(animalsPath);
+      
+      // 아직 처리되지 않은 새 파일만 필터링
+      const newAnimalFiles = animalFiles.filter(file => !processedFiles.includes(`animals/${file}`));
+      
+      // animals 폴더의 각 이미지 처리
+      for (const file of newAnimalFiles) {
+        console.log(`새 동물 이미지 발견: ${file}`);
+        await submitMediaToAI(`animals/${file}`, 'animal');
+        
+        // 데모를 위해 각 파일 처리 사이에 약간의 지연 추가 (선택사항)
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
     }
+    
+    // 2. face 폴더 처리 (나중에 처리)
+    const facePath = path.join(MEDIA_PATH, 'face');
+    if (fs.existsSync(facePath)) {
+      console.log('face 폴더 이미지 처리 시작...');
+      const faceFiles = fs.readdirSync(facePath);
+      
+      // 아직 처리되지 않은 새 파일만 필터링
+      const newFaceFiles = faceFiles.filter(file => !processedFiles.includes(`face/${file}`));
+      
+      // face 폴더의 각 이미지 처리
+      for (const file of newFaceFiles) {
+        console.log(`새 사람 이미지 발견: ${file}`);
+        await submitMediaToAI(`face/${file}`, 'human');
+        
+        // 데모를 위해 각 파일 처리 사이에 약간의 지연 추가 (선택사항)
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+    
+    console.log('모든 폴더 처리 완료');
   } catch (error) {
     console.error('미디어 스캔 오류:', error);
   }
 }
 
-// AI 서버에 이미지 제출 함수
-async function submitMediaToAI(imageId) {
+// AI 서버에 이미지 제출 함수 수정
+async function submitMediaToAI(imagePath, category) {
   try {
-    const imagePath = path.join(MEDIA_PATH, 'images', imageId);
+    // 이미지 경로 분석 (폴더/파일명 구조)
+    const [folderName, fileName] = imagePath.split('/');
+    const fullImagePath = path.join(MEDIA_PATH, imagePath);
     
-    if (!fs.existsSync(imagePath)) {
-      console.error(`이미지를 찾을 수 없음: ${imagePath}`);
+    if (!fs.existsSync(fullImagePath)) {
+      console.error(`이미지를 찾을 수 없음: ${fullImagePath}`);
       return;
     }
     
@@ -100,21 +130,27 @@ async function submitMediaToAI(imageId) {
     // 작업 상태 초기화
     database.updateJobStatus(jobId, {
       status: 'processing',
-      imageId,
+      imageId: fileName,
+      imagePath: imagePath,
+      category: category, // 동물 또는 사람 카테고리 추가
       startTime: new Date().toISOString(),
       completed: false
     });
     
     // 처리된 파일 목록에 추가
-    database.addProcessedMediaFile(imageId);
+    database.addProcessedMediaFile(imagePath);
     
     // AI 서버에 전송
     const formData = new FormData();
-    formData.append('file', fs.createReadStream(imagePath));
+    formData.append('file', fs.createReadStream(fullImagePath));
     formData.append('job_id', jobId);
+    formData.append('category', category); // 카테고리를 AI 서버에 전달
+    
+    // AI 서버 엔드포인트 선택 (카테고리별 다른 엔드포인트 사용)
+    const endpoint = category === 'animal' ? 'analyze-animal' : 'analyze-human';
     
     // 분석 요청
-    const response = await axios.post(`${AI_SERVER_URL}/submit-job`, formData, {
+    const response = await axios.post(`${AI_SERVER_URL}/${endpoint}`, formData, {
       headers: formData.getHeaders()
     });
     
@@ -132,13 +168,15 @@ async function submitMediaToAI(imageId) {
       database.addAlert(currentStatus, {
         ...response.data,
         jobId,
-        imageId
+        imageId: fileName,
+        imagePath: imagePath,
+        category: category
       });
     }
     
     return jobId;
   } catch (error) {
-    console.error('이미지 제출 오류:', error, imageId);
+    console.error('이미지 제출 오류:', error, imagePath);
     return null;
   }
 }
@@ -208,14 +246,36 @@ app.get('/api/status', (req, res) => {
 // 이미지 목록 조회 API
 app.get('/api/media/list', (req, res) => {
     try {
-        const imagesPath = path.join(MEDIA_PATH, 'images');
-        let images = [];
+        const category = req.query.category || 'all'; // 'all', 'animals', 'face'
+        let result = {};
         
-        if (fs.existsSync(imagesPath)) {
-            images = fs.readdirSync(imagesPath);
+        if (category === 'all' || category === 'animals') {
+            const animalsPath = path.join(MEDIA_PATH, 'animals');
+            if (fs.existsSync(animalsPath)) {
+                result.animals = fs.readdirSync(animalsPath).map(file => ({
+                    id: file,
+                    path: `animals/${file}`,
+                    category: 'animal'
+                }));
+            } else {
+                result.animals = [];
+            }
         }
         
-        res.json({ success: true, images });
+        if (category === 'all' || category === 'face') {
+            const facePath = path.join(MEDIA_PATH, 'face');
+            if (fs.existsSync(facePath)) {
+                result.face = fs.readdirSync(facePath).map(file => ({
+                    id: file,
+                    path: `face/${file}`,
+                    category: 'human'
+                }));
+            } else {
+                result.face = [];
+            }
+        }
+        
+        res.json({ success: true, files: result });
     } catch (error) {
         console.error('이미지 목록 조회 오류:', error);
         res.status(500).json({ success: false, message: '이미지 목록 조회 중 오류가 발생했습니다' });

@@ -60,17 +60,34 @@ const mediaFiles = {
 const scanMediaFiles = async () => {
     try {
         const baseDir = path.join(__dirname, '..', 'media');
+        mediaFiles.images = [];
         
-        // 이미지 스캔
-        const imagesPath = path.join(baseDir, 'images');
-        if (fs.existsSync(imagesPath)) {
-            const files = await fs2.readdir(imagesPath);
-            mediaFiles.images = files.map(file => ({
-                id: file,
-                path: path.join('images', file),
+        // animals 폴더 스캔
+        const animalsPath = path.join(baseDir, 'animals');
+        if (fs.existsSync(animalsPath)) {
+            const files = await fs2.readdir(animalsPath);
+            const animalImages = files.map(file => ({
+                id: `animals/${file}`,
+                path: `animals/${file}`,
                 type: 'image',
-                url: `/media/images/${file}`
+                category: 'animal',
+                url: `/media/animals/${file}`
             }));
+            mediaFiles.images.push(...animalImages);
+        }
+        
+        // face 폴더 스캔
+        const facePath = path.join(baseDir, 'face');
+        if (fs.existsSync(facePath)) {
+            const files = await fs2.readdir(facePath);
+            const faceImages = files.map(file => ({
+                id: `face/${file}`,
+                path: `face/${file}`,
+                type: 'image',
+                category: 'human',
+                url: `/media/face/${file}`
+            }));
+            mediaFiles.images.push(...faceImages);
         }
         
         return mediaFiles;
