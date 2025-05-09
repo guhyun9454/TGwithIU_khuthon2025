@@ -54,81 +54,96 @@ app.post('/api/update-status', async (req, res) => {
     }
 });
 
-// 현재 상태 조회 API (폴링용)
+// 이미지 전송 API - 비동기 처리
+app.post('/api/submit-media', async (req, res) => {
+  try {
+    const { mediaId, mediaType } = req.body;
+    const mediaPath = path.join(MEDIA_PATH, mediaType === 'video' ? 'videos' : 'images', mediaId);
+    
+    if (!fs.existsSync(mediaPath)) {
+      return res.status(404).json({ 
+        success: false, 
+        message: `${mediaType === 'video' ? '비디오' : '이미지'}를 찾을 수 없습니다` 
+      });
+    }
+    
+    // 작업 ID 생성 (AI 서버와의 트래킹용)
+    const jobId = Date.now().toString();
+    
+    // 비동기적으로 AI 서버에 전송 (응답 대기 없이 즉시 반환)
+    const formData = new FormData();
+    formData.append('file', fs.createReadStream(mediaPath));
+    formData.append('type', mediaType);
+    formData.append('job_id', jobId);
+    
+    // 분석 요청을 비동기로 처리 (결과를 기다리지 않음)
+    axios.post(`${AI_SERVER_URL}/submit-job`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    }).then(response => {
+      if (response.data && response.data.status) {
+        // 백그라운드에서 상태 업데이트
+        currentStatus = response.data.status;
+        database.addAlert(currentStatus, {
+          ...response.data,
+          jobId,
+          mediaId,
+          mediaType
+        });
+      }
+    }).catch(error => {
+      console.error('비동기 분석 오류:', error);
+    });
+    
+    // 클라이언트에 작업 ID만 즉시 반환
+    res.json({
+      success: true,
+      jobId,
+      message: '분석 작업이 시작되었습니다'
+    });
+  } catch (error) {
+    console.error('미디어 제출 오류:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '미디어 제출 중 오류가 발생했습니다' 
+    });
+  }
+});
+
+// 작업 상태 확인 API
+app.get('/api/job-status/:jobId', async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    
+    // AI 서버에 작업 상태 확인
+    const response = await axios.get(`${AI_SERVER_URL}/job-status/${jobId}`);
+    
+    if (response.data && response.data.status) {
+      // 상태 업데이트가 완료된 경우에만 현재 상태를 변경
+      if (response.data.completed) {
+        currentStatus = response.data.status;
+      }
+    }
+    
+    res.json({
+      success: true,
+      status: currentStatus,
+      jobDetails: response.data
+    });
+  } catch (error) {
+    console.error('작업 상태 확인 오류:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '작업 상태 확인 중 오류가 발생했습니다' 
+    });
+  }
+});
+
+// 현재 시스템 상태만 확인하는 폴링용 API (기존)
 app.get('/api/status', (req, res) => {
-    res.json({ status: currentStatus });
-});
-
-// 이미지 AI 분석 요청 API
-app.post('/api/analyze-image', async (req, res) => {
-    try {
-        const { imageId } = req.body;
-        const imagePath = path.join(MEDIA_PATH, 'images', imageId);
-        
-        if (!fs.existsSync(imagePath)) {
-            return res.status(404).json({ success: false, message: '이미지를 찾을 수 없습니다' });
-        }
-        
-        // 이미지 파일을 AI 서버로 전송
-        const formData = new FormData();
-        formData.append('file', fs.createReadStream(imagePath));
-        
-        const response = await axios.post(`${AI_SERVER_URL}/analyze-image`, formData, {
-            headers: {
-                'Content-Type': 'multipart/form-data'
-            }
-        });
-        
-        // AI 서버에서 받은 결과로 상태 업데이트
-        if (response.data && response.data.status) {
-            currentStatus = response.data.status;
-        }
-        
-        res.json({
-            success: true,
-            status: currentStatus,
-            details: response.data
-        });
-    } catch (error) {
-        console.error('이미지 분석 오류:', error);
-        res.status(500).json({ success: false, message: '이미지 분석 중 오류가 발생했습니다' });
-    }
-});
-
-// 비디오 AI 분석 요청 API
-app.post('/api/analyze-video', async (req, res) => {
-    try {
-        const { videoId } = req.body;
-        const videoPath = path.join(MEDIA_PATH, 'videos', videoId);
-        
-        if (!fs.existsSync(videoPath)) {
-            return res.status(404).json({ success: false, message: '비디오를 찾을 수 없습니다' });
-        }
-        
-        // 비디오 파일을 AI 서버로 전송
-        const formData = new FormData();
-        formData.append('file', fs.createReadStream(videoPath));
-        
-        const response = await axios.post(`${AI_SERVER_URL}/analyze-video`, formData, {
-            headers: {
-                'Content-Type': 'multipart/form-data'
-            }
-        });
-        
-        // AI 서버에서 받은 결과로 상태 업데이트
-        if (response.data && response.data.status) {
-            currentStatus = response.data.status;
-        }
-        
-        res.json({
-            success: true,
-            status: currentStatus,
-            details: response.data
-        });
-    } catch (error) {
-        console.error('비디오 분석 오류:', error);
-        res.status(500).json({ success: false, message: '비디오 분석 중 오류가 발생했습니다' });
-    }
+  res.json({ 
+    status: currentStatus,
+    lastUpdated: database.getLastAlert()?.timestamp
+  });
 });
 
 // 샘플 미디어 목록 조회 API
