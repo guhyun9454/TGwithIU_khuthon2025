@@ -42,18 +42,8 @@ if (!fs.existsSync(MEDIA_PATH)) {
     fs.mkdirSync(path.join(MEDIA_PATH, 'videos'));
 }
 
-// 상태 업데이트 API
-app.post('/api/update-status', async (req, res) => {
-    const { status } = req.body;
-    
-    if (Object.values(STATUS).includes(status)) {
-        currentStatus = status;
-        console.log(`상태 업데이트: ${status}`);
-        res.json({ success: true, status: currentStatus });
-    } else {
-        res.status(400).json({ success: false, message: '잘못된 상태값입니다' });
-    }
-});
+
+
 
 // 백엔드 시작 시 및 주기적으로 미디어 폴더 모니터링
 function startMediaMonitoring() {
@@ -250,6 +240,20 @@ app.post('/api/media/upload', (req, res) => {
     // 여기서는 데모용이므로 API만 정의
     res.json({ success: true, message: '파일이 성공적으로 업로드되었습니다' });
 });
+
+// 상태 업데이트 API
+app.post('/api/update-status', async (req, res) => {
+    const { status } = req.body;
+    
+    if (Object.values(STATUS).includes(status)) {
+        currentStatus = status;
+        console.log(`상태 업데이트: ${status}`);
+        res.json({ success: true, status: currentStatus });
+    } else {
+        res.status(400).json({ success: false, message: '잘못된 상태값입니다' });
+    }
+});
+
 
 // 시뮬레이션을 위한 상태 변경 API (데모 테스트용)
 app.post('/api/simulate', (req, res) => {
