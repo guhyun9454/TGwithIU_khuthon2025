@@ -132,7 +132,7 @@ async function submitMediaToAI(imagePath, category) {
       status: 'processing',
       imageId: fileName,
       imagePath: imagePath,
-      category: category, // 동물 또는 사람 카테고리 추가
+      category: category,
       startTime: new Date().toISOString(),
       completed: false
     });
@@ -144,7 +144,7 @@ async function submitMediaToAI(imagePath, category) {
     const formData = new FormData();
     formData.append('file', fs.createReadStream(fullImagePath));
     formData.append('job_id', jobId);
-    formData.append('category', category); // 카테고리를 AI 서버에 전달
+    formData.append('category', category);
     
     // AI 서버 엔드포인트 선택 (카테고리별 다른 엔드포인트 사용)
     const endpoint = category === 'animal' ? 'analyze-animal' : 'analyze-human';
@@ -154,23 +154,61 @@ async function submitMediaToAI(imagePath, category) {
       headers: formData.getHeaders()
     });
     
-    // 응답 처리
+    // 동물 클래스 확인 (Gorani, Met-dwaeji, Neoguri, Met-tokki, Noru)
+    const animalClasses = ['Gorani', 'Met-dwaeji', 'Neoguri', 'Met-tokki', 'Noru'];
+    
+    // 상태 및 감지된 객체 처리
+    let detectedStatus = STATUS.NORMAL;
+    let detectedAnimals = [];
+    
+    if (response.data && response.data.objects) {
+      // 감지된 객체 목록
+      const detectedObjects = response.data.objects;
+      
+      // 동물 카테고리인 경우 동물 감지 확인
+      if (category === 'animal') {
+        // 감지된 객체 중 지정된 동물 클래스가 있는지 확인
+        detectedAnimals = detectedObjects.filter(obj => animalClasses.includes(obj));
+        
+        // 감지된 동물이 있으면 animal_alert 상태로 설정
+        if (detectedAnimals.length > 0) {
+          detectedStatus = STATUS.ANIMAL_ALERT;
+        }
+      } 
+      // 사람 카테고리인 경우 사람 감지 확인
+      else if (category === 'human') {
+        // 사람이 감지되었는지 확인
+        const detectedPersons = detectedObjects.filter(obj => obj === 'person');
+        
+        // 사람이 감지되면 human_alert 상태로 설정
+        if (detectedPersons.length > 0) {
+          detectedStatus = STATUS.HUMAN_ALERT;
+        }
+      }
+    }
+    
+    // 작업 상태 업데이트
     database.updateJobStatus(jobId, {
-      ...response.data,
+      status: detectedStatus,
       completed: true,
-      completedTime: new Date().toISOString()
+      completedTime: new Date().toISOString(),
+      detectedObjects: response.data.objects || [],
+      detectedAnimals: detectedAnimals
     });
     
-    // 상태 업데이트
-    if (response.data && response.data.status && response.data.status !== STATUS.NORMAL) {
-      currentStatus = response.data.status;
+    // 전체 시스템 상태 업데이트 (정상 상태가 아닌 경우에만)
+    if (detectedStatus !== STATUS.NORMAL) {
+      currentStatus = detectedStatus;
       currentStatusJobId = jobId;
-      database.addAlert(currentStatus, {
-        ...response.data,
+      
+      // 알림 추가
+      database.addAlert(detectedStatus, {
         jobId,
         imageId: fileName,
         imagePath: imagePath,
-        category: category
+        category: category,
+        detectedObjects: response.data.objects || [],
+        detectedAnimals: detectedAnimals
       });
     }
     
@@ -228,20 +266,25 @@ app.get('/api/job-status/:jobId', async (req, res) => {
   }
 });
 
-// 현재 시스템 상태만 확인하는 폴링용 API (기존)
+// 현재 시스템 상태 확인하는 폴링용 API
 app.get('/api/status', (req, res) => {
-    const lastAlert = database.getLastAlert();
-    
-    res.json({ 
-      status: currentStatus,
-      jobId: currentStatusJobId,
-      lastUpdated: lastAlert?.timestamp,
-      details: currentStatusJobId ? {
-        job: database.getJobStatus(currentStatusJobId),
-        // 관련된 세부 정보가 필요하면 여기에 추가
-      } : null
-    });
+  const lastAlert = database.getLastAlert();
+  const jobStatus = currentStatusJobId ? database.getJobStatus(currentStatusJobId) : null;
+  
+  // 감지된 동물 목록 (있는 경우)
+  let detectedAnimals = [];
+  if (jobStatus && jobStatus.detectedAnimals) {
+    detectedAnimals = jobStatus.detectedAnimals;
+  }
+  
+  res.json({ 
+    status: currentStatus,
+    jobId: currentStatusJobId,
+    lastUpdated: lastAlert?.timestamp,
+    detectedAnimals: detectedAnimals, // 감지된 동물 목록 추가
+    details: jobStatus || null
   });
+});
 
 // 이미지 목록 조회 API
 app.get('/api/media/list', (req, res) => {
