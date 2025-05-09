@@ -9,6 +9,7 @@ app.use(bodyParser.urlencoded({extended: true}))
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const FormData = require('form-data');
 
 const PORT = 8081
 app.listen(PORT, () => {
@@ -67,40 +68,62 @@ app.post('/api/submit-media', async (req, res) => {
       });
     }
     
-    // 작업 ID 생성 (AI 서버와의 트래킹용)
+    // 작업 ID 생성
     const jobId = Date.now().toString();
     
-    // 비동기적으로 AI 서버에 전송 (응답 대기 없이 즉시 반환)
+    // 작업 상태 초기화 (database 함수 사용)
+    database.updateJobStatus(jobId, {
+      status: 'processing',
+      mediaId,
+      mediaType,
+      startTime: new Date().toISOString(),
+      completed: false
+    });
+    
+    // 비동기적으로 AI 서버에 전송
     const formData = new FormData();
     formData.append('file', fs.createReadStream(mediaPath));
     formData.append('type', mediaType);
     formData.append('job_id', jobId);
     
-    // 분석 요청을 비동기로 처리 (결과를 기다리지 않음)
+    // 분석 요청 비동기 처리
     axios.post(`${AI_SERVER_URL}/submit-job`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
+      headers: formData.getHeaders()
     }).then(response => {
-      if (response.data && response.data.status) {
-        // 백그라운드에서 상태 업데이트
-        currentStatus = response.data.status;
-        database.addAlert(currentStatus, {
-          ...response.data,
-          jobId,
-          mediaId,
-          mediaType
-        });
-      }
+      // database 함수로 상태 업데이트
+      database.updateJobStatus(jobId, {
+        ...response.data,
+        completed: true,
+        completedTime: new Date().toISOString()
+      });
+      
+      // 상태 업데이트 및 알림 추가
+      currentStatus = response.data.status;
+      database.addAlert(currentStatus, {
+        ...response.data,
+        jobId,
+        mediaId,
+        mediaType
+      });
     }).catch(error => {
+      // 오류 발생 시 상태 업데이트
+      database.updateJobStatus(jobId, {
+        error: error.message,
+        completed: true,
+        failed: true,
+        completedTime: new Date().toISOString()
+      });
       console.error('비동기 분석 오류:', error);
     });
     
-    // 클라이언트에 작업 ID만 즉시 반환
+    // 클라이언트에 작업 ID 반환
     res.json({
       success: true,
       jobId,
       message: '분석 작업이 시작되었습니다'
     });
   } catch (error) {
+    // 오류 처리
     console.error('미디어 제출 오류:', error);
     res.status(500).json({ 
       success: false, 
@@ -114,20 +137,38 @@ app.get('/api/job-status/:jobId', async (req, res) => {
   try {
     const { jobId } = req.params;
     
-    // AI 서버에 작업 상태 확인
-    const response = await axios.get(`${AI_SERVER_URL}/job-status/${jobId}`);
+    // database 함수로 작업 상태 조회
+    const jobStatus = database.getJobStatus(jobId);
     
-    if (response.data && response.data.status) {
-      // 상태 업데이트가 완료된 경우에만 현재 상태를 변경
-      if (response.data.completed) {
-        currentStatus = response.data.status;
+    if (!jobStatus) {
+      // AI 서버에 상태 확인 (대체 방법)
+      try {
+        const response = await axios.get(`${AI_SERVER_URL}/job-status/${jobId}`);
+        
+        if (response.data && response.data.status) {
+          if (response.data.completed) {
+            currentStatus = response.data.status;
+          }
+          
+          res.json({
+            success: true,
+            status: currentStatus,
+            jobDetails: response.data
+          });
+          return;
+        }
+      } catch (aiError) {
+        return res.status(404).json({ 
+          success: false, 
+          message: '해당 작업을 찾을 수 없습니다' 
+        });
       }
     }
     
     res.json({
       success: true,
-      status: currentStatus,
-      jobDetails: response.data
+      systemStatus: currentStatus,
+      jobDetails: jobStatus
     });
   } catch (error) {
     console.error('작업 상태 확인 오류:', error);

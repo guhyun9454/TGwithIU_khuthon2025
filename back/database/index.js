@@ -93,13 +93,50 @@ const scanMediaFiles = async () => {
     }
 };
 
+// 작업 상태 저장소 (메모리 기반)
+const jobStatusMap = new Map();
+
+// 작업 상태 추가/업데이트
+const updateJobStatus = (jobId, statusData) => {
+    const currentStatus = jobStatusMap.get(jobId) || {};
+    jobStatusMap.set(jobId, {
+        ...currentStatus,
+        ...statusData,
+        lastUpdated: DateTime.now().toISO()
+    });
+    return jobStatusMap.get(jobId);
+};
+
+// 작업 상태 조회
+const getJobStatus = (jobId) => {
+    return jobStatusMap.get(jobId) || null;
+};
+
+// 모든 작업 상태 조회 (최신순)
+const getAllJobStatuses = (limit = 10) => {
+    return Array.from(jobStatusMap.entries())
+        .sort((a, b) => {
+            const timeA = a[1].lastUpdated || a[1].startTime || '';
+            const timeB = b[1].lastUpdated || b[1].startTime || '';
+            return timeB.localeCompare(timeA);
+        })
+        .slice(0, limit)
+        .map(([jobId, status]) => ({
+            jobId,
+            ...status
+        }));
+};
+
 module.exports = {
     STATUS_TYPES,
     addAlert,
     getAlerts,
     getLastAlert,
     scanMediaFiles,
-    getMediaFiles: () => mediaFiles
+    getMediaFiles: () => mediaFiles,
+    updateJobStatus,
+    getJobStatus,
+    getAllJobStatuses
 };
 
 
