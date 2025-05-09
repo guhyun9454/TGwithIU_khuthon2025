@@ -3,7 +3,7 @@ train: images/train
 val: images/train
 names:
   0: Gorani
-  1: Maet-dwaeji
+  1: Met-dwaeji
   2: Neoguri
-  3: Meet-ttokki
+  3: Met-tokki
   4: Noru
