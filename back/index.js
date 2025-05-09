@@ -44,8 +44,8 @@ if (!fs.existsSync(MEDIA_PATH)) {
     fs.mkdirSync(path.join(MEDIA_PATH, 'face'));    // 사람 감지용 폴더
 }
 
-
-
+// 1. 전역 변수 추가: 현재 처리 중인 작업 추적
+let processingJobs = new Set();
 
 // 백엔드 시작 시 및 주기적으로 미디어 폴더 모니터링
 function startMediaMonitoring() {
@@ -96,16 +96,19 @@ async function scanAndProcessNewMedia() {
       console.log('face 폴더 이미지 처리 시작...');
       const faceFiles = fs.readdirSync(facePath);
       
-      // 아직 처리되지 않은 새 파일만 필터링
-      const newFaceFiles = faceFiles.filter(file => !processedFiles.includes(`face/${file}`));
+      // 아직 처리되지 않은 새 파일만 필터링 + 현재 처리 중인 파일도 제외
+      const newFaceFiles = faceFiles.filter(file => 
+        !processedFiles.includes(`face/${file}`) && 
+        !Array.from(processingJobs).some(job => job.includes(file))
+      );
       
-      // face 폴더의 각 이미지 처리
-      for (const file of newFaceFiles) {
-        console.log(`새 사람 이미지 발견: ${file}`);
+      console.log('새로운 얼굴 이미지:', newFaceFiles);
+      
+      // 한 번에 하나의 face 이미지만 처리 (병렬 처리 방지)
+      if (newFaceFiles.length > 0) {
+        const file = newFaceFiles[0];
+        console.log(`새 사람 이미지 발견: ${file} - 처리 시작`);
         await submitMediaToAI(`face/${file}`, 'human');
-        
-        // 데모를 위해 각 파일 처리 사이에 약간의 지연 추가 (선택사항)
-        await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
     
@@ -130,7 +133,15 @@ async function submitMediaToAI(imagePath, category) {
     // 작업 ID 생성
     const jobId = Date.now().toString();
     
-    // 작업 상태 초기화 - 중요 변경사항: 여기서는 currentStatusJobId를 업데이트하지 않음
+    // 작업 시작 로깅 추가
+    console.log(`작업 시작: category=${category}, file=${fileName}, jobId=${jobId}`);
+    
+    // 사람 감지의 경우 처리 중인 작업으로 추가
+    if (category === 'human') {
+      processingJobs.add(`${jobId}_${fileName}`);
+    }
+    
+    // 작업 상태 초기화
     database.updateJobStatus(jobId, {
       status: 'processing',
       imageId: fileName,
@@ -149,19 +160,20 @@ async function submitMediaToAI(imagePath, category) {
     formData.append('job_id', jobId);
     formData.append('category', category);
     
-    // AI 서버 엔드포인트 선택 (카테고리별 다른 엔드포인트 사용)
-    //  const endpoint = category === 'animal' ? 'api/detect-animals' : 'api/detect-human';
+    // AI 서버 엔드포인트 선택
     const endpoint = category === 'animal' ? 'api/detect-animals' : 'api/detect-face';
     
     // 분석 요청
+    console.log(`AI 서버에 요청 전송: ${endpoint}, jobId=${jobId}`);
     const response = await axios.post(`${AI_SERVER_URL}/${endpoint}`, formData, {
       headers: formData.getHeaders()
     });
+    console.log(`AI 서버 응답 수신: ${endpoint}, jobId=${jobId}`);
     
     // 상태 및 감지된 객체 처리
     let detectedStatus = STATUS.NORMAL;
     let detectedAnimals = [];
-    let isOwner = false; // 주인 여부
+    let isOwner = false;
     
     if (response.data) {
       // 동물 카테고리 처리
@@ -189,7 +201,7 @@ async function submitMediaToAI(imagePath, category) {
           detectedStatus = STATUS.ANIMAL_ALERT;
         }
       } 
-      // 사람 카테고리 처리 (새로운 로직으로 변경)
+      // 사람 카테고리 처리
       else if (category === 'human') {
         // isOwner 값 확인
         isOwner = response.data.isOwner === true;
@@ -213,10 +225,10 @@ async function submitMediaToAI(imagePath, category) {
       completedTime: new Date().toISOString(),
       detectedObjects: response.data.objects || [],
       detectedAnimals: detectedAnimals,
-      isOwner: category === 'human' ? isOwner : undefined // 사람 카테고리인 경우에만 isOwner 저장
+      isOwner: category === 'human' ? isOwner : undefined
     });
     
-    // 전체 시스템 상태 업데이트 부분에서만 currentStatusJobId 업데이트
+    // 전체 시스템 상태 업데이트
     if (detectedStatus === STATUS.NORMAL) {
       // 정상 상태로 변경
       currentStatus = STATUS.NORMAL;
@@ -238,9 +250,26 @@ async function submitMediaToAI(imagePath, category) {
       });
     }
     
+    // 사람 감지의 경우 처리 중인 작업에서 제거
+    if (category === 'human') {
+      processingJobs.delete(`${jobId}_${fileName}`);
+    }
+    
+    console.log(`작업 완료: category=${category}, file=${fileName}, jobId=${jobId}, status=${detectedStatus}`);
     return jobId;
   } catch (error) {
     console.error('이미지 제출 오류:', error, imagePath);
+    
+    // 오류가 발생한 경우 처리 중인 작업에서 제거 (사람 감지만)
+    if (category === 'human') {
+      const [folderName, fileName] = imagePath.split('/');
+      Array.from(processingJobs).forEach(job => {
+        if (job.includes(fileName)) {
+          processingJobs.delete(job);
+        }
+      });
+    }
+    
     return null;
   }
 }
