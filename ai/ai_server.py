@@ -53,6 +53,11 @@ def draw_boxes(image_path, results, save_path):
     image.save(save_path)
 
 # ======================
+# 처리된 job_id 목록 캐시 추가 (전역 변수)
+# ======================
+processed_jobs = set()
+
+# ======================
 # Route: Detect objects
 # ======================
 @app.post("/api/detect-animals")
@@ -60,7 +65,16 @@ async def detect_objects(
     file: UploadFile = File(...),
     job_id: str = Form(...)
 ):
-
+    # 중복 처리 방지
+    if job_id in processed_jobs:
+        output_path = os.path.join(args.save_path, f"{job_id}.jpg")
+        if os.path.exists(output_path):
+            print(f"중복 요청 무시: {job_id}")
+            return {
+                "objects": [],
+                "cached": True
+            }
+    
     temp_path = f"./temp_{job_id}.jpg"
     with open(temp_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
@@ -82,6 +96,9 @@ async def detect_objects(
 
     os.remove(temp_path)
 
+    # 처리 완료 후 job_id 기록
+    processed_jobs.add(job_id)
+
     return {
         "objects": detected_classes
     }
@@ -94,6 +111,16 @@ async def detect_face(
     file: UploadFile = File(...),
     job_id: str = Form(...)
 ):
+    # 중복 처리 방지: 이미 처리된 job_id인 경우 캐시된 결과 반환
+    if job_id in processed_jobs:
+        output_path = os.path.join(args.save_path, f"{job_id}.jpg")
+        if os.path.exists(output_path):
+            print(f"중복 요청 무시: {job_id}")
+            return {
+                "isOwner": True,  # 캐시된 결과가 없으므로 기본값 true 반환
+                "cached": True
+            }
+    
     if owner_embeddings is None:
         return JSONResponse(content={"error": "주인 임베딩 파일이 존재하지 않습니다"}, status_code=500)
         
@@ -139,6 +166,9 @@ async def detect_face(
         output_path = os.path.join(args.save_path, f"{job_id}.jpg")
         image.save(output_path)
         os.remove(temp_path)
+
+        # 처리 완료 후 job_id 기록
+        processed_jobs.add(job_id)
 
         return {
             "isOwner": is_owner

@@ -64,11 +64,14 @@ function sortNumericFiles(files) {
   });
 }
 
+// 현재 실행 중인 작업의 동시성 제어를 위한 플래그
+let isProcessingMedia = false;
+
 // 백엔드 시작 시 및 주기적으로 미디어 폴더 모니터링
 function startMediaMonitoring() {
   // 초기 상태 설정
   currentStatus = STATUS.NORMAL;
-  currentStatusJobId = `init_${Date.now()}`;
+  currentStatusJobId = null;
   
   // 초기 폴더 스캔
   //scanAndProcessNewMedia();
@@ -84,6 +87,15 @@ function startMediaMonitoring() {
 
 // 새 미디어 파일 스캔 및 폴더별 순서대로 처리
 async function scanAndProcessNewMedia() {
+  // 이미 처리 중이면 리턴 (동시 실행 방지)
+  if (isProcessingMedia) {
+    console.log('이미지 처리가 이미 진행 중입니다. 이 요청은 무시됩니다.');
+    return;
+  }
+  
+  // 처리 시작 표시
+  isProcessingMedia = true;
+  
   try {
     // 처리된 파일 목록
     const processedFiles = database.getProcessedMediaFiles();
@@ -167,6 +179,9 @@ async function scanAndProcessNewMedia() {
     console.log('모든 폴더 처리 완료');
   } catch (error) {
     console.error('미디어 스캔 오류:', error);
+  } finally {
+    // 처리 완료 표시 (항상 실행됨)
+    isProcessingMedia = false;
   }
 }
 
