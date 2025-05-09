@@ -71,14 +71,23 @@ let isProcessingMedia = false;
 function startMediaMonitoring() {
   // 초기 상태 설정
   currentStatus = STATUS.NORMAL;
-  currentStatusJobId = null;
+  currentStatusJobId = `init_${Date.now()}`;  // 항상 초기값 설정
+  
+  // 초기 작업 상태 저장
+  database.updateJobStatus(currentStatusJobId, {
+    status: currentStatus,
+    startTime: new Date().toISOString(),
+    completedTime: new Date().toISOString(),
+    completed: true,
+    isInitial: true
+  });
   
   // 초기 폴더 스캔
-  //scanAndProcessNewMedia();
   setTimeout(() => {
     console.log('지연된 초기 폴더 스캔 시작...');
     scanAndProcessNewMedia();
   }, 5000);
+  
   // 주기적 스캔 설정 (예: 30초마다)
   setInterval(scanAndProcessNewMedia, 30000);
   
@@ -119,13 +128,16 @@ async function scanAndProcessNewMedia() {
       // animals 폴더의 각 이미지 처리
       for (const file of newAnimalFiles) {
         console.log(`새 동물 이미지 발견: ${file}`);
-        const result = await submitMediaToAI(`animals/${file}`, 'animal', false); // 상태 즉시 업데이트 안함
-        if (result && result.status !== STATUS.NORMAL) {
+        const result = await submitMediaToAI(`animals/${file}`, 'animal', false);
+        
+        // 항상 결과를 설정
+        if (result) {
           finalStatus = result.status;
           finalJobId = result.jobId;
+          console.log(`동물 감지 결과: 상태=${result.status}, jobId=${result.jobId}`);
         }
         
-        // 데모를 위해 각 파일 처리 사이에 약간의 지연 추가 (선택사항)
+        // 데모를 위해 각 파일 처리 사이에 약간의 지연 추가
         await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
@@ -144,18 +156,17 @@ async function scanAndProcessNewMedia() {
       // face 폴더의 각 이미지 처리
       for (const file of newFaceFiles) {
         console.log(`새 사람 이미지 발견: ${file}`);
-        const result = await submitMediaToAI(`face/${file}`, 'human', false); // 상태 즉시 업데이트 안함
+        const result = await submitMediaToAI(`face/${file}`, 'human', false);
+        
         if (result) {
           // 마지막 결과만 저장 (순서대로 처리되므로 마지막이 최종 상태)
           latestIsOwner = result.isOwner;
+          finalStatus = result.status;
           finalJobId = result.jobId;
-          
-          if (!result.isOwner) {
-            finalStatus = STATUS.HUMAN_ALERT;
-          }
+          console.log(`사람 감지 결과: 상태=${result.status}, jobId=${result.jobId}, 주인여부=${latestIsOwner}`);
         }
         
-        // 데모를 위해 각 파일 처리 사이에 약간의 지연 추가 (선택사항)
+        // 데모를 위해 각 파일 처리 사이에 약간의 지연 추가
         await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
@@ -372,6 +383,9 @@ app.get('/api/job-status/:jobId', async (req, res) => {
 
 // 현재 시스템 상태 확인하는 폴링용 API
 app.get('/api/status', (req, res) => {
+  console.log("상태 요청 받음");
+  console.log(`현재 상태: ${currentStatus}, jobId: ${currentStatusJobId}`);
+  
   const lastAlert = database.getLastAlert();
   
   // 감지된 동물 목록 및 사람 정보 초기화
@@ -381,9 +395,11 @@ app.get('/api/status', (req, res) => {
   
   if (currentStatusJobId) {
     const jobStatus = database.getJobStatus(currentStatusJobId);
+    console.log("작업 상태:", jobStatus);
+    
     if (jobStatus) {
       // 동물 정보 처리
-      if (jobStatus.detectedAnimals) {
+      if (jobStatus.detectedAnimals && jobStatus.detectedAnimals.length > 0) {
         detectedAnimals = jobStatus.detectedAnimals;
         
         // 동물 이름을 한글로 변환
@@ -405,7 +421,7 @@ app.get('/api/status', (req, res) => {
   // 응답 구성
   const response = {
     status: currentStatus,
-    jobId: currentStatusJobId,
+    jobId: currentStatusJobId || "no_job_id",  // null 대신 기본값 제공
     lastUpdated: lastAlert?.timestamp
   };
   
@@ -420,6 +436,7 @@ app.get('/api/status', (req, res) => {
     response.isOwner = isOwner;
   }
   
+  console.log("응답:", response);
   res.json(response);
 });
 
@@ -473,20 +490,40 @@ app.post('/api/media/upload', (req, res) => {
 app.post('/api/update-status', async (req, res) => {
     const { status, jobId } = req.body;
     
+    console.log("상태 업데이트 요청:", req.body);
+    
     if (Object.values(STATUS).includes(status)) {
         currentStatus = status;
         
         // jobId가 제공되면 사용, 아니면 생성
         currentStatusJobId = jobId || `manual_${Date.now()}`;
         
-        // 작업 상태 저장 (선택 사항)
+        // 작업 상태 저장
         database.updateJobStatus(currentStatusJobId, {
           status: currentStatus,
           startTime: new Date().toISOString(),
           completedTime: new Date().toISOString(),
           completed: true,
-          isManualUpdate: true
+          isManualUpdate: true,
+          // 동물 관련 정보 추가 (동물 알림인 경우)
+          ...(status === STATUS.ANIMAL_ALERT ? {
+            category: 'animal',
+            detectedAnimals: ['Gorani']  // 기본 동물 추가
+          } : {}),
+          // 사람 관련 정보 추가 (사람 알림인 경우)
+          ...(status === STATUS.HUMAN_ALERT ? {
+            category: 'human',
+            isOwner: false
+          } : {})
         });
+        
+        // 알림 추가 (경보 상태에만)
+        if (status !== STATUS.NORMAL) {
+          const jobStatus = database.getJobStatus(currentStatusJobId);
+          if (jobStatus) {
+            database.addAlert(status, jobStatus);
+          }
+        }
         
         console.log(`상태 업데이트: ${status}, jobId: ${currentStatusJobId}`);
         res.json({ 
@@ -498,7 +535,6 @@ app.post('/api/update-status', async (req, res) => {
         res.status(400).json({ success: false, message: '잘못된 상태값입니다' });
     }
 });
-
 
 // 시뮬레이션을 위한 상태 변경 API (데모 테스트용)
 app.post('/api/simulate', (req, res) => {
