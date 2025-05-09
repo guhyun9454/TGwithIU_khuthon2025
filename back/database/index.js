@@ -22,6 +22,16 @@ const STATUS_TYPES = {
     WEATHER_ALERT: 'weather_alert'  // 악천후 경보
 };
 
+const animal_types = {
+    'Gorani': '고라니',               // 정상 상태
+    'Met-dwaeji': '멧돼지',   // 야생동물 출현 경보
+    'Neoguri': '너구리',     // 사람 침입 경보
+    'Met-tokki': '멧토끼',
+    "Noru": "노루",
+};
+
+
+
 // 알림 저장하기
 const addAlert = (type, details) => {
     const alert = {
@@ -153,7 +163,8 @@ module.exports = {
     getJobStatus,
     getAllJobStatuses,
     addProcessedMediaFile,
-    getProcessedMediaFiles
+    getProcessedMediaFiles,
+    animal_types
 };
 
 

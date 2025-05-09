@@ -280,10 +280,20 @@ app.get('/api/status', (req, res) => {
   
   // 감지된 동물 목록 (있는 경우)
   let detectedAnimals = [];
+  let animalNames = []; // 한글 동물 이름 배열 추가
+  
   if (currentStatusJobId) {
     const jobStatus = database.getJobStatus(currentStatusJobId);
     if (jobStatus && jobStatus.detectedAnimals) {
       detectedAnimals = jobStatus.detectedAnimals;
+      
+      // 동물 이름을 한글로 변환
+      animalNames = detectedAnimals.map(animal => {
+        return {
+          code: animal,
+          name: database.animal_types[animal] || animal
+        };
+      });
     }
   }
   
@@ -291,7 +301,8 @@ app.get('/api/status', (req, res) => {
     status: currentStatus,
     jobId: currentStatusJobId,
     lastUpdated: lastAlert?.timestamp,
-    detectedAnimals: detectedAnimals // 감지된 동물 목록만 포함
+    detectedAnimals: detectedAnimals, // 원래 코드명
+    animalInfo: animalNames // 한글 이름이 포함된 정보 추가
   });
 });
 
