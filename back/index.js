@@ -54,8 +54,11 @@ function startMediaMonitoring() {
   currentStatusJobId = `init_${Date.now()}`;
   
   // 초기 폴더 스캔
-  scanAndProcessNewMedia();
-  
+  //scanAndProcessNewMedia();
+  setTimeout(() => {
+    console.log('지연된 초기 폴더 스캔 시작...');
+    scanAndProcessNewMedia();
+  }, 5000);
   // 주기적 스캔 설정 (예: 30초마다)
   setInterval(scanAndProcessNewMedia, 30000);
   
