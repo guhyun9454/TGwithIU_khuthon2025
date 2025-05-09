@@ -9,10 +9,11 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
-  String statusMessage = "이상이 없습니다.";
-  List<String> logMessages = ["이상이 없습니다."];
+  String statusMessage = "특이사항이 없습니다.";
+  List<String> logMessages = ["특이사항이 없습니다."];
   String currentTime = "";
   String currentImageUrl = "";
+  String previousImageUrl = "";
   bool isPaused = false;
   Timer? statusTimer;
   final ScrollController _logScrollController = ScrollController();
@@ -45,11 +46,11 @@ class _MainScreenState extends State<MainScreen> {
 
           switch (data["status"]) {
             case "normal":
-              newStatus = "이상이 없습니다.";
+              newStatus = "특이사항이 없습니다.";
               break;
             case "animal_alert":
               newStatus = data["animalInfo"]
-                  .map((a) => "야생동물 (" + a["name"] + ")이 나타났습니다.")
+                  .map((a) => a["name"] + "가 나타났습니다.")
                   .join(", ");
               break;
             case "human_alert":
@@ -84,6 +85,7 @@ class _MainScreenState extends State<MainScreen> {
           .get(Uri.parse('http://localhost:9454/api/image-result/$jobId'));
       if (response.statusCode == 200) {
         setState(() {
+          previousImageUrl = currentImageUrl;
           currentImageUrl = 'http://localhost:9454/api/image-result/$jobId';
         });
       }
@@ -107,32 +109,70 @@ class _MainScreenState extends State<MainScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         centerTitle: true,
-        title: Text(
-          'CCTV',
-          style: TextStyle(
-            color: const Color.fromARGB(255, 65, 65, 65),
-            fontSize: 25,
-            fontWeight: FontWeight.w500,
-          ),
+        title: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              'CCTV',
+              style: TextStyle(
+                color: const Color.fromARGB(255, 65, 65, 65),
+                fontSize: 25,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            Spacer(),
+            Image.asset('assets/person.png', width: 30, height: 30),
+          ],
         ),
       ),
       body: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16.0),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             SizedBox(height: 10),
-            currentImageUrl.isNotEmpty
-                ? Image.network(currentImageUrl)
-                : CircularProgressIndicator(),
+            Stack(
+              children: [
+                if (previousImageUrl.isNotEmpty)
+                  Image.network(previousImageUrl,
+                      fit: BoxFit.cover, width: double.infinity, height: 250),
+                if (currentImageUrl.isNotEmpty)
+                  Image.network(currentImageUrl,
+                      fit: BoxFit.cover, width: double.infinity, height: 250),
+              ],
+            ),
             SizedBox(height: 10),
-            Text(currentTime,
-                style: TextStyle(fontSize: 15, color: Colors.black54)),
+            Align(
+              alignment: Alignment.centerRight,
+              child: Text(currentTime,
+                  style: TextStyle(fontSize: 15, color: Colors.black54)),
+            ),
             SizedBox(height: 15),
-            Text('상태',
-                style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold)),
-            Expanded(
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text('상태',
+                  style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
+            ),
+            SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              height: 410,
+              padding: EdgeInsets.all(12.0),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border.all(color: Color(0xFFE1E1E1)),
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: Color(0x3F000000),
+                    blurRadius: 4,
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
               child: ListView.builder(
                 controller: _logScrollController,
+                reverse: true,
                 itemCount: logMessages.length,
                 itemBuilder: (context, index) => Container(
                   padding: EdgeInsets.all(12),
@@ -163,7 +203,7 @@ class _MainScreenState extends State<MainScreen> {
                           style: TextStyle(color: Colors.white, fontSize: 20),
                         ),
                       ),
-                      SizedBox(width: 15),
+                      SizedBox(width: 10),
                       Expanded(
                         child: Text(
                           logMessages[index],
