@@ -88,6 +88,11 @@ async function scanAndProcessNewMedia() {
     // 처리된 파일 목록
     const processedFiles = database.getProcessedMediaFiles();
     
+    // 상태 업데이트 플래그 (최종 상태만 업데이트하기 위함)
+    let finalStatus = STATUS.NORMAL;
+    let finalJobId = null;
+    let latestIsOwner = true; // 기본값 true (주인)
+    
     // 1. animals 폴더 처리 (먼저 처리)
     const animalsPath = path.join(MEDIA_PATH, 'animals');
     if (fs.existsSync(animalsPath)) {
@@ -102,7 +107,11 @@ async function scanAndProcessNewMedia() {
       // animals 폴더의 각 이미지 처리
       for (const file of newAnimalFiles) {
         console.log(`새 동물 이미지 발견: ${file}`);
-        await submitMediaToAI(`animals/${file}`, 'animal');
+        const result = await submitMediaToAI(`animals/${file}`, 'animal', false); // 상태 즉시 업데이트 안함
+        if (result && result.status !== STATUS.NORMAL) {
+          finalStatus = result.status;
+          finalJobId = result.jobId;
+        }
         
         // 데모를 위해 각 파일 처리 사이에 약간의 지연 추가 (선택사항)
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -123,11 +132,36 @@ async function scanAndProcessNewMedia() {
       // face 폴더의 각 이미지 처리
       for (const file of newFaceFiles) {
         console.log(`새 사람 이미지 발견: ${file}`);
-        await submitMediaToAI(`face/${file}`, 'human');
+        const result = await submitMediaToAI(`face/${file}`, 'human', false); // 상태 즉시 업데이트 안함
+        if (result) {
+          // 마지막 결과만 저장 (순서대로 처리되므로 마지막이 최종 상태)
+          latestIsOwner = result.isOwner;
+          finalJobId = result.jobId;
+          
+          if (!result.isOwner) {
+            finalStatus = STATUS.HUMAN_ALERT;
+          }
+        }
         
         // 데모를 위해 각 파일 처리 사이에 약간의 지연 추가 (선택사항)
         await new Promise(resolve => setTimeout(resolve, 500));
       }
+    }
+    
+    // 모든 이미지 처리 후 최종 상태 업데이트
+    if (finalJobId) {
+      currentStatus = finalStatus;
+      currentStatusJobId = finalJobId;
+      
+      // 알림 추가 (경보 상태에만)
+      if (finalStatus !== STATUS.NORMAL) {
+        const jobStatus = database.getJobStatus(finalJobId);
+        if (jobStatus) {
+          database.addAlert(finalStatus, jobStatus);
+        }
+      }
+      
+      console.log(`최종 상태 업데이트: ${finalStatus}, jobId: ${finalJobId}`);
     }
     
     console.log('모든 폴더 처리 완료');
@@ -137,7 +171,7 @@ async function scanAndProcessNewMedia() {
 }
 
 // AI 서버에 이미지 제출 함수 수정
-async function submitMediaToAI(imagePath, category) {
+async function submitMediaToAI(imagePath, category, updateStatusImmediately = true) {
   try {
     // 이미지 경로 분석 (폴더/파일명 구조)
     const [folderName, fileName] = imagePath.split('/');
@@ -145,7 +179,7 @@ async function submitMediaToAI(imagePath, category) {
     
     if (!fs.existsSync(fullImagePath)) {
       console.error(`이미지를 찾을 수 없음: ${fullImagePath}`);
-      return;
+      return null;
     }
     
     // 파일명에서 숫자 부분 추출 (확장자 제거)
@@ -236,7 +270,16 @@ async function submitMediaToAI(imagePath, category) {
       isOwner: category === 'human' ? isOwner : undefined // 사람 카테고리인 경우에만 isOwner 저장
     });
     
-    // 전체 시스템 상태 업데이트 (NORMAL로도 업데이트 가능하도록 수정)
+    // 상태를 즉시 업데이트하지 않고 결과만 반환
+    if (!updateStatusImmediately) {
+      return {
+        jobId,
+        status: detectedStatus,
+        isOwner: category === 'human' ? isOwner : undefined
+      };
+    }
+    
+    // 전체 시스템 상태 업데이트 (즉시 업데이트하는 경우)
     if (detectedStatus === STATUS.NORMAL) {
       // 정상 상태로 변경
       currentStatus = STATUS.NORMAL;
