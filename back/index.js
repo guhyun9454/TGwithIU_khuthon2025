@@ -55,23 +55,61 @@ app.post('/api/update-status', async (req, res) => {
     }
 });
 
-// 이미지 전송 API - 비동기 처리
-app.post('/api/submit-media', async (req, res) => {
+// 백엔드 시작 시 및 주기적으로 미디어 폴더 모니터링
+function startMediaMonitoring() {
+  // 초기 폴더 스캔
+  scanAndProcessNewMedia();
+  
+  // 주기적 스캔 설정 (예: 30초마다)
+  setInterval(scanAndProcessNewMedia, 30000);
+  
+  console.log('미디어 모니터링이 시작되었습니다.');
+}
+
+// 새 미디어 파일 스캔 및 처리
+async function scanAndProcessNewMedia() {
   try {
-    const { mediaId, mediaType } = req.body;
+    // 처리된 파일 목록 (이미 분석 요청한 파일들)
+    const processedFiles = database.getProcessedMediaFiles();
+    
+    // 현재 폴더 내 모든 파일 스캔
+    await database.scanMediaFiles();
+    const allFiles = database.getMediaFiles();
+    
+    // 새 파일 찾기
+    const newImageFiles = allFiles.images.filter(img => !processedFiles.includes(img.id));
+    const newVideoFiles = allFiles.videos.filter(vid => !processedFiles.includes(vid.id));
+    
+    // 새 이미지 파일 처리
+    for (const img of newImageFiles) {
+      console.log(`새 이미지 발견: ${img.id}`);
+      await submitMediaToAI(img.id, 'image');
+    }
+    
+    // 새 비디오 파일 처리
+    for (const vid of newVideoFiles) {
+      console.log(`새 비디오 발견: ${vid.id}`);
+      await submitMediaToAI(vid.id, 'video');
+    }
+  } catch (error) {
+    console.error('미디어 스캔 오류:', error);
+  }
+}
+
+// AI 서버에 미디어 제출 함수
+async function submitMediaToAI(mediaId, mediaType) {
+  try {
     const mediaPath = path.join(MEDIA_PATH, mediaType === 'video' ? 'videos' : 'images', mediaId);
     
     if (!fs.existsSync(mediaPath)) {
-      return res.status(404).json({ 
-        success: false, 
-        message: `${mediaType === 'video' ? '비디오' : '이미지'}를 찾을 수 없습니다` 
-      });
+      console.error(`파일을 찾을 수 없음: ${mediaPath}`);
+      return;
     }
     
     // 작업 ID 생성
     const jobId = Date.now().toString();
     
-    // 작업 상태 초기화 (database 함수 사용)
+    // 작업 상태 초기화
     database.updateJobStatus(jobId, {
       status: 'processing',
       mediaId,
@@ -80,24 +118,29 @@ app.post('/api/submit-media', async (req, res) => {
       completed: false
     });
     
-    // 비동기적으로 AI 서버에 전송
+    // 처리된 파일 목록에 추가
+    database.addProcessedMediaFile(mediaId);
+    
+    // AI 서버에 전송
     const formData = new FormData();
     formData.append('file', fs.createReadStream(mediaPath));
     formData.append('type', mediaType);
     formData.append('job_id', jobId);
     
-    // 분석 요청 비동기 처리
-    axios.post(`${AI_SERVER_URL}/submit-job`, formData, {
+    // 분석 요청
+    const response = await axios.post(`${AI_SERVER_URL}/submit-job`, formData, {
       headers: formData.getHeaders()
-    }).then(response => {
-      // database 함수로 상태 업데이트
-      database.updateJobStatus(jobId, {
-        ...response.data,
-        completed: true,
-        completedTime: new Date().toISOString()
-      });
-      
-      // 상태 업데이트 및 알림 추가
+    });
+    
+    // 응답 처리
+    database.updateJobStatus(jobId, {
+      ...response.data,
+      completed: true,
+      completedTime: new Date().toISOString()
+    });
+    
+    // 상태 업데이트
+    if (response.data && response.data.status && response.data.status !== STATUS.NORMAL) {
       currentStatus = response.data.status;
       database.addAlert(currentStatus, {
         ...response.data,
@@ -105,32 +148,14 @@ app.post('/api/submit-media', async (req, res) => {
         mediaId,
         mediaType
       });
-    }).catch(error => {
-      // 오류 발생 시 상태 업데이트
-      database.updateJobStatus(jobId, {
-        error: error.message,
-        completed: true,
-        failed: true,
-        completedTime: new Date().toISOString()
-      });
-      console.error('비동기 분석 오류:', error);
-    });
+    }
     
-    // 클라이언트에 작업 ID 반환
-    res.json({
-      success: true,
-      jobId,
-      message: '분석 작업이 시작되었습니다'
-    });
+    return jobId;
   } catch (error) {
-    // 오류 처리
-    console.error('미디어 제출 오류:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: '미디어 제출 중 오류가 발생했습니다' 
-    });
+    console.error('미디어 제출 오류:', error, mediaId, mediaType);
+    return null;
   }
-});
+}
 
 // 작업 상태 확인 API
 app.get('/api/job-status/:jobId', async (req, res) => {
@@ -247,6 +272,9 @@ app.post('/api/simulate', (req, res) => {
     
     res.json({ success: true, status: currentStatus });
 });
+
+// 서버 시작 시 모니터링 시작
+startMediaMonitoring();
 
 
 
