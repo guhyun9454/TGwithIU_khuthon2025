@@ -15,7 +15,6 @@ def parse_args():
     parser.add_argument('--imgsz',       type=int,   default=640,          help='이미지 사이즈')
     parser.add_argument('--batch',       type=int,   default=32,           help='배치 사이즈')
     parser.add_argument('--workers',     type=int,   default=8,            help='num_workers')
-    parser.add_argument('--project',     type=str,   default='runs/train', help='출력 디렉터리')
     parser.add_argument('--name',        type=str,   default=None,         help='실험 이름')
     parser.add_argument('--device',      type=str,   default='0',           help='학습 디바이스 (예: "0")')
     parser.add_argument('--log',         type=str,   default='train.log',  help='로그 파일 경로')
@@ -47,7 +46,6 @@ def main():
         batch=args.batch,
         workers=args.workers,
         device=args.device,
-        project=args.project,
         name=args.name,
         optimizer='SGD',
         lr0=0.01,
