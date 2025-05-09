@@ -174,46 +174,35 @@ async function scanAndProcessNewMedia() {
     // 모든 이미지 처리 후 최종 상태 업데이트
     console.log(`처리 완료 - 최종 상태: ${finalStatus}, 최종 jobId: ${finalJobId}, 현재 상태: ${currentStatus}`);
 
-    // !!! 중요 !!! 상태 값 추적 및 디버깅
-    console.log("최종 상태 설정 전 객체 확인:", {
-      finalStatus,
-      finalJobId,
-      currentStatus,
-      currentStatusJobId
-    });
-
     if (finalJobId) {
       // 기존 상태 저장
       const previousStatus = currentStatus;
       const previousJobId = currentStatusJobId;
       
-      // !!!중요!!! 강제로 값 설정 - 디버깅용
-      if (finalStatus === STATUS.ANIMAL_ALERT) {
-        console.log("동물 경보 상태 강제 설정!");
-      }
+      // 가장 최근 작업 정보 가져오기
+      const latestJobStatus = database.getJobStatus(finalJobId);
       
-      // 상태 업데이트
-      currentStatus = finalStatus;
-      currentStatusJobId = finalJobId;
+      if (latestJobStatus) {
+        // 최신 상태 반영
+        currentStatus = latestJobStatus.status || finalStatus;
+        currentStatusJobId = finalJobId;
+        
+        console.log(`최신 작업 기반 상태 업데이트: ${previousStatus} -> ${currentStatus}`);
+      } else {
+        // 작업 정보가 없는 경우 기본값 사용
+        currentStatus = finalStatus;
+        currentStatusJobId = finalJobId;
+      }
       
       console.log(`상태 업데이트: ${previousStatus} -> ${currentStatus}, jobId: ${previousJobId} -> ${currentStatusJobId}`);
       
-      // 전역 변수 설정 확인
-      console.log("전역 변수 확인:", {
-        currentStatus,
-        currentStatusJobId
-      });
-      
       // 알림 추가 (경보 상태에만)
-      if (finalStatus !== STATUS.NORMAL) {
+      if (currentStatus !== STATUS.NORMAL) {
         const jobStatus = database.getJobStatus(finalJobId);
         if (jobStatus) {
-          database.addAlert(finalStatus, jobStatus);
-          console.log(`알림 추가됨: ${finalStatus}`);
+          database.addAlert(currentStatus, jobStatus);
         }
       }
-      
-      console.log(`최종 상태 업데이트: ${finalStatus}, jobId: ${finalJobId}`);
     }
     
     console.log('모든 폴더 처리 완료');
@@ -433,28 +422,45 @@ app.get('/api/status', (req, res) => {
   console.log("\n===== 상태 요청 받음 =====");
   console.log(`현재 전역 상태: currentStatus=${currentStatus}, currentStatusJobId=${currentStatusJobId}`);
   
-  // jobId로부터 상태 재확인
-  if (currentStatusJobId && currentStatusJobId.startsWith('animal_')) {
-    const jobStatus = database.getJobStatus(currentStatusJobId);
-    if (jobStatus && jobStatus.detectedAnimals && jobStatus.detectedAnimals.length > 0) {
-      // 동물이 감지된 job인 경우 상태 강제 설정
-      console.log(`동물 감지 jobId 확인됨: ${currentStatusJobId}, 동물: ${jobStatus.detectedAnimals.join(', ')}`);
-      currentStatus = STATUS.ANIMAL_ALERT;
-    }
-  }
-  
   const lastAlert = database.getLastAlert();
   
   // 감지된 동물 목록 및 사람 정보 초기화
   let detectedAnimals = [];
   let animalNames = [];
   let isOwner = undefined;
+  let hasDetection = false;  // 감지 여부 플래그
   
   if (currentStatusJobId) {
     const jobStatus = database.getJobStatus(currentStatusJobId);
     console.log("현재 작업 상태:", jobStatus);
     
     if (jobStatus) {
+      // 최근 작업 상태 기반으로 현재 상태 업데이트
+      if (jobStatus.status && jobStatus.status !== STATUS.NORMAL) {
+        console.log(`작업 상태 기반 업데이트: ${currentStatus} -> ${jobStatus.status}`);
+        currentStatus = jobStatus.status;
+        hasDetection = true;
+      } else if (jobStatus.status === STATUS.NORMAL && !hasDetection) {
+        // 감지가 없는 경우에만 정상 상태로 설정
+        currentStatus = STATUS.NORMAL;
+      }
+      
+      // 사람 정보 처리 (사람 감지가 우선)
+      if (jobStatus.category === 'human') {
+        isOwner = jobStatus.isOwner;
+        
+        // 외부인이 감지된 경우
+        if (isOwner === false) {
+          currentStatus = STATUS.HUMAN_ALERT;
+          hasDetection = true;
+          console.log("외부인 감지로 상태 설정: HUMAN_ALERT");
+        } else if (isOwner === true && !hasDetection) {
+          // 주인이 감지되고 다른 감지가 없는 경우
+          currentStatus = STATUS.NORMAL;
+          console.log("주인 감지로 상태 설정: NORMAL");
+        }
+      }
+      
       // 동물 정보 처리
       if (jobStatus.detectedAnimals && jobStatus.detectedAnimals.length > 0) {
         detectedAnimals = jobStatus.detectedAnimals;
@@ -467,16 +473,12 @@ app.get('/api/status', (req, res) => {
           };
         });
         
-        // 동물이 감지된 경우 상태 확인 및 강제 설정
-        if (currentStatusJobId.startsWith('animal_')) {
-          console.log(`동물 jobId에서 ${detectedAnimals.length}개 동물 발견, 상태 강제 설정`);
+        // 동물이 감지된 경우 (다른 감지가 없는 경우에만)
+        if (!hasDetection && jobStatus.category === 'animal') {
           currentStatus = STATUS.ANIMAL_ALERT;
+          hasDetection = true;
+          console.log("동물 감지로 상태 설정: ANIMAL_ALERT");
         }
-      }
-      
-      // 사람 정보 처리
-      if (jobStatus.category === 'human') {
-        isOwner = jobStatus.isOwner;
       }
     }
   }
