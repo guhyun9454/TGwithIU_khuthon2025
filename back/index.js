@@ -73,7 +73,7 @@ function sortNumericFiles(files) {
 }
 
 // 현재 실행 중인 작업의 동시성 제어를 위한 플래그
-let isProcessingMedia = false;
+// let isProcessingMedia = false; // 중복 선언 제거
 
 // 상태 변경 함수
 function updateSystemStatus(newStatus, jobId, source) {
@@ -239,7 +239,7 @@ async function scanAndProcessNewMedia() {
             finalJobId = result.jobId;
             hasDetection = true;
           } 
-          // 동물 감지가 없는 경우에만 normal 상태 갱신
+          // 동물이 감지된 경우는 주인이 나타나도 상태를 변경하지 않음
           else if (!hasDetection) {
             finalStatus = result.status;
             finalJobId = result.jobId;
@@ -253,9 +253,13 @@ async function scanAndProcessNewMedia() {
     }
     
     // 모든 이미지 처리 후 최종 상태 업데이트
-    console.log(`처리 완료 - 최종 상태: ${finalStatus}, 최종 jobId: ${finalJobId}, 현재 상태: ${currentStatus}, 감지 여부: ${hasDetection}`);
+    console.log(`처리 완료 - 최종 상태: ${finalStatus}, 최종 jobId: ${finalJobId}, 현재 상태: ${currentStatus}`);
 
-    if (finalJobId) {
+    // 현재 상태가 경보 상태인데 최종 상태가 normal이면 상태를 유지하는 코드 추가
+    if (currentStatus !== STATUS.NORMAL && finalStatus === STATUS.NORMAL) {
+      console.log(`경보 상태(${currentStatus}) 유지 - normal 상태로 자동 변경하지 않음`);
+      // 작업 처리만 하고 상태는 변경하지 않음
+    } else if (finalJobId) {
       const jobStatus = database.getJobStatus(finalJobId);
       if (jobStatus) {
         updateSystemStatus(finalStatus, finalJobId, 'scan_result');
