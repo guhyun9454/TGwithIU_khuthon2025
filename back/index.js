@@ -44,8 +44,25 @@ if (!fs.existsSync(MEDIA_PATH)) {
     fs.mkdirSync(path.join(MEDIA_PATH, 'face'));    // 사람 감지용 폴더
 }
 
-
-
+// 파일 목록을 숫자 순서로 정렬하는 함수 추가
+function sortNumericFiles(files) {
+  return files.sort((a, b) => {
+    // 파일 확장자 제거하고 숫자만 추출
+    const aName = a.split('.')[0];
+    const bName = b.split('.')[0];
+    
+    // 숫자로 변환하여 정렬
+    const aNum = parseInt(aName);
+    const bNum = parseInt(bName);
+    
+    if (!isNaN(aNum) && !isNaN(bNum)) {
+      return aNum - bNum;
+    }
+    
+    // 숫자가 아닌 경우 일반 문자열 비교
+    return a.localeCompare(b);
+  });
+}
 
 // 백엔드 시작 시 및 주기적으로 미디어 폴더 모니터링
 function startMediaMonitoring() {
@@ -75,7 +92,9 @@ async function scanAndProcessNewMedia() {
     const animalsPath = path.join(MEDIA_PATH, 'animals');
     if (fs.existsSync(animalsPath)) {
       console.log('animals 폴더 이미지 처리 시작...');
-      const animalFiles = fs.readdirSync(animalsPath);
+      
+      // 정렬된 파일 목록 가져오기
+      const animalFiles = sortNumericFiles(fs.readdirSync(animalsPath));
       
       // 아직 처리되지 않은 새 파일만 필터링
       const newAnimalFiles = animalFiles.filter(file => !processedFiles.includes(`animals/${file}`));
@@ -94,7 +113,9 @@ async function scanAndProcessNewMedia() {
     const facePath = path.join(MEDIA_PATH, 'face');
     if (fs.existsSync(facePath)) {
       console.log('face 폴더 이미지 처리 시작...');
-      const faceFiles = fs.readdirSync(facePath);
+      
+      // 정렬된 파일 목록 가져오기
+      const faceFiles = sortNumericFiles(fs.readdirSync(facePath));
       
       // 아직 처리되지 않은 새 파일만 필터링
       const newFaceFiles = faceFiles.filter(file => !processedFiles.includes(`face/${file}`));
@@ -127,8 +148,12 @@ async function submitMediaToAI(imagePath, category) {
       return;
     }
     
-    // 작업 ID 생성
-    const jobId = Date.now().toString();
+    // 파일명에서 숫자 부분 추출 (확장자 제거)
+    const fileNumberStr = fileName.split('.')[0];
+    
+    // 작업 ID 생성 - 파일명 기반 (순서 보존)
+    // category_fileNumber 형식 사용 (예: animal_001 또는 human_001)
+    const jobId = `${category}_${fileNumberStr}`;
     
     // 작업 상태 초기화
     database.updateJobStatus(jobId, {
