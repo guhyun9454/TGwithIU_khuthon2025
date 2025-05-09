@@ -3,3 +3,5 @@ torchvision
 ultralytics
 fastapi
 uvicorn
+deepface
+tf_keras
