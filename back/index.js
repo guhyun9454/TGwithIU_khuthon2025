@@ -130,7 +130,7 @@ async function submitMediaToAI(imagePath, category) {
     // 작업 ID 생성
     const jobId = Date.now().toString();
     
-    // 작업 상태 초기화
+    // 작업 상태 초기화 - 중요 변경사항: 여기서는 currentStatusJobId를 업데이트하지 않음
     database.updateJobStatus(jobId, {
       status: 'processing',
       imageId: fileName,
@@ -166,10 +166,13 @@ async function submitMediaToAI(imagePath, category) {
     if (response.data) {
       // 동물 카테고리 처리
       if (category === 'animal' && response.data.objects) {
+        // 객체가 배열인지 확인
+        const detectedObjects = Array.isArray(response.data.objects) ? 
+          response.data.objects : 
+          [response.data.objects];
+        
         // 동물 클래스 확인 (Gorani, Met-dwaeji, Neoguri, Met-tokki, Noru)
         const animalClasses = ['Gorani', 'Met-dwaeji', 'Neoguri', 'Met-tokki', 'Noru'];
-        // 감지된 객체 목록
-        const detectedObjects = response.data.objects;
         
         // 감지된 객체 중 지정된 동물 클래스가 있는지 확인
         detectedAnimals = detectedObjects.filter(obj => animalClasses.includes(obj));
@@ -178,6 +181,7 @@ async function submitMediaToAI(imagePath, category) {
         console.log('파일:', imagePath);
         console.log('감지된 객체들:', detectedObjects);
         console.log('감지된 동물들:', detectedAnimals);
+        console.log('데이터 타입 확인:', typeof response.data.objects, Array.isArray(response.data.objects));
         console.log('========================');
         
         // 감지된 동물이 있으면 animal_alert 상태로 설정
@@ -212,7 +216,7 @@ async function submitMediaToAI(imagePath, category) {
       isOwner: category === 'human' ? isOwner : undefined // 사람 카테고리인 경우에만 isOwner 저장
     });
     
-    // 전체 시스템 상태 업데이트 (NORMAL로도 업데이트 가능하도록 수정)
+    // 전체 시스템 상태 업데이트 부분에서만 currentStatusJobId 업데이트
     if (detectedStatus === STATUS.NORMAL) {
       // 정상 상태로 변경
       currentStatus = STATUS.NORMAL;
@@ -297,9 +301,18 @@ app.get('/api/status', (req, res) => {
   let animalNames = [];
   let isOwner = undefined;
   
+  // 현재 상태와 관련된 작업 상태 가져오기
+  let jobStatus = null;
+  let statusToReport = currentStatus;
+  
   if (currentStatusJobId) {
-    const jobStatus = database.getJobStatus(currentStatusJobId);
-    if (jobStatus) {
+    jobStatus = database.getJobStatus(currentStatusJobId);
+    
+    // 여기가 핵심 수정 부분: processing 상태는 무시하고 이전 상태 유지
+    if (jobStatus && jobStatus.status === 'processing') {
+      console.log('처리 중인 작업을 감지했습니다. 이전 상태 유지');
+      // processing 상태라면 currentStatus만 반환하고 세부 정보는 이전 정보 유지
+    } else if (jobStatus) {
       // 동물 정보 처리
       if (jobStatus.detectedAnimals) {
         detectedAnimals = jobStatus.detectedAnimals;
@@ -322,15 +335,17 @@ app.get('/api/status', (req, res) => {
   
   // 응답 구성
   const response = {
-    status: currentStatus,
+    status: statusToReport,
     jobId: currentStatusJobId,
     lastUpdated: lastAlert?.timestamp
   };
   
   // 동물 관련 정보 추가 (있는 경우)
   if (currentStatus === STATUS.ANIMAL_ALERT) {
-    response.detectedAnimals = detectedAnimals;
-    response.animalInfo = animalNames;
+    response.detectedAnimals = detectedAnimals || [];
+    response.animalInfo = animalNames.length > 0 ? 
+      animalNames : 
+      [{ code: "unknown", name: "알 수 없는 동물" }];
   }
   
   // 사람 관련 정보 추가 (있는 경우)
@@ -397,7 +412,7 @@ app.post('/api/update-status', async (req, res) => {
         // jobId가 제공되면 사용, 아니면 생성
         currentStatusJobId = jobId || `manual_${Date.now()}`;
         
-        // 작업 상태 저장 (선택 사항)
+        // 작업 상태 저장
         database.updateJobStatus(currentStatusJobId, {
           status: currentStatus,
           startTime: new Date().toISOString(),
@@ -405,6 +420,14 @@ app.post('/api/update-status', async (req, res) => {
           completed: true,
           isManualUpdate: true
         });
+        
+        // 경보 상태일 경우 알림 추가 (이 부분 추가)
+        if (status !== STATUS.NORMAL) {
+          database.addAlert(status, {
+            jobId: currentStatusJobId,
+            isManualUpdate: true
+          });
+        }
         
         console.log(`상태 업데이트: ${status}, jobId: ${currentStatusJobId}`);
         res.json({ 
@@ -443,7 +466,7 @@ app.post('/api/simulate', (req, res) => {
     // 현재 상태의 jobId 업데이트
     currentStatusJobId = jobId;
     
-    // 시뮬레이션 작업 상태 저장 (선택 사항)
+    // 작업 상태 저장
     database.updateJobStatus(jobId, {
       status: currentStatus,
       startTime: new Date().toISOString(),
@@ -451,6 +474,14 @@ app.post('/api/simulate', (req, res) => {
       completed: true,
       isSimulation: true
     });
+    
+    // 경보 상태일 경우 알림 추가 (이 부분 추가)
+    if (currentStatus !== STATUS.NORMAL) {
+      database.addAlert(currentStatus, {
+        jobId,
+        isSimulation: true
+      });
+    }
     
     res.json({
       success: true, 
