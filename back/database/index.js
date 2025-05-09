@@ -112,18 +112,23 @@ const jobStatusMap = new Map();
 
 // 작업 상태 추가/업데이트
 const updateJobStatus = (jobId, statusData) => {
+    console.log(`[DB] 작업 상태 업데이트: jobId=${jobId}, 상태=${statusData.status}`);
     const currentStatus = jobStatusMap.get(jobId) || {};
-    jobStatusMap.set(jobId, {
+    const updatedStatus = {
         ...currentStatus,
         ...statusData,
         lastUpdated: DateTime.now().toISO()
-    });
-    return jobStatusMap.get(jobId);
+    };
+    jobStatusMap.set(jobId, updatedStatus);
+    console.log(`[DB] 저장된 작업 상태:`, updatedStatus);
+    return updatedStatus;
 };
 
 // 작업 상태 조회
 const getJobStatus = (jobId) => {
-    return jobStatusMap.get(jobId) || null;
+    const status = jobStatusMap.get(jobId) || null;
+    console.log(`[DB] 작업 상태 조회: jobId=${jobId}, 결과=`, status);
+    return status;
 };
 
 // 모든 작업 상태 조회 (최신순)

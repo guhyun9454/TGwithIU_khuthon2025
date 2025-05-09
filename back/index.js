@@ -14,6 +14,10 @@ const FormData = require('form-data');
 const PORT = 8081
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
+    // 서버 시작시 플래그 초기화
+    isProcessingMedia = false;
+    // 모니터링 시작
+    startMediaMonitoring();
 });
 
 const database = require('./database/index')            //데이터베이스 파일 경로
@@ -33,6 +37,10 @@ const STATUS = {
 let currentStatus = STATUS.NORMAL;
 // 현재 상태와 관련된 가장 최근 jobId
 let currentStatusJobId = null;
+// 자동 리셋 타이머
+let autoResetTimer = null;
+// 자동 리셋 시간 (ms)
+const AUTO_RESET_TIMEOUT = 60000; // 60초
 
 // 이미지 저장 경로
 const MEDIA_PATH = path.join(__dirname, 'media');
@@ -67,15 +75,75 @@ function sortNumericFiles(files) {
 // 현재 실행 중인 작업의 동시성 제어를 위한 플래그
 let isProcessingMedia = false;
 
+// 상태 변경 함수
+function updateSystemStatus(newStatus, jobId, source) {
+  const previousStatus = currentStatus;
+  const previousJobId = currentStatusJobId;
+  
+  // 상태 변경
+  currentStatus = newStatus;
+  currentStatusJobId = jobId;
+  
+  console.log(`상태 변경 (${source}): ${previousStatus} -> ${newStatus}, jobId: ${previousJobId} -> ${jobId}`);
+  
+  // 경보 상태인 경우 자동 리셋 타이머 설정
+  if (newStatus !== STATUS.NORMAL) {
+    // 기존 타이머 취소
+    if (autoResetTimer) {
+      clearTimeout(autoResetTimer);
+      autoResetTimer = null;
+    }
+    
+    // 새 타이머 설정
+    autoResetTimer = setTimeout(() => {
+      console.log(`자동 상태 리셋: ${currentStatus} -> ${STATUS.NORMAL} (${AUTO_RESET_TIMEOUT}ms 타임아웃)`);
+      resetToNormal('auto_timeout');
+    }, AUTO_RESET_TIMEOUT);
+    
+    console.log(`자동 리셋 타이머 설정: ${AUTO_RESET_TIMEOUT}ms`);
+  }
+  
+  return { previousStatus, previousJobId };
+}
+
+// 상태를 normal로 리셋하는 함수
+function resetToNormal(reason) {
+  // 기존 타이머 취소
+  if (autoResetTimer) {
+    clearTimeout(autoResetTimer);
+    autoResetTimer = null;
+  }
+  
+  const newJobId = `reset_${Date.now()}`;
+  const { previousStatus } = updateSystemStatus(STATUS.NORMAL, newJobId, 'reset');
+  
+  // 데이터베이스 업데이트
+  database.updateJobStatus(newJobId, {
+    status: STATUS.NORMAL,
+    category: 'reset',
+    startTime: new Date().toISOString(),
+    completedTime: new Date().toISOString(),
+    completed: true,
+    resetReason: reason
+  });
+  
+  return { 
+    status: STATUS.NORMAL, 
+    jobId: newJobId,
+    previousStatus 
+  };
+}
+
 // 백엔드 시작 시 및 주기적으로 미디어 폴더 모니터링
 function startMediaMonitoring() {
   // 초기 상태 설정
-  currentStatus = STATUS.NORMAL;
-  currentStatusJobId = `init_${Date.now()}`;  // 항상 초기값 설정
+  const initialJobId = `init_${Date.now()}`;
+  updateSystemStatus(STATUS.NORMAL, initialJobId, 'init');
   
   // 초기 작업 상태 저장
-  database.updateJobStatus(currentStatusJobId, {
-    status: currentStatus,
+  database.updateJobStatus(initialJobId, {
+    status: STATUS.NORMAL,
+    category: 'system',
     startTime: new Date().toISOString(),
     completedTime: new Date().toISOString(),
     completed: true,
@@ -112,7 +180,7 @@ async function scanAndProcessNewMedia() {
     // 상태 업데이트 플래그 (최종 상태만 업데이트하기 위함)
     let finalStatus = STATUS.NORMAL;
     let finalJobId = null;
-    let latestIsOwner = true; // 기본값 true (주인)
+    let hasDetection = false;
     
     // 1. animals 폴더 처리 (먼저 처리)
     const animalsPath = path.join(MEDIA_PATH, 'animals');
@@ -132,8 +200,14 @@ async function scanAndProcessNewMedia() {
         
         // 항상 결과를 설정
         if (result) {
-          finalStatus = result.status;
-          finalJobId = result.jobId;
+          if (result.status === STATUS.ANIMAL_ALERT) {
+            finalStatus = result.status;
+            finalJobId = result.jobId;
+            hasDetection = true;
+          } else if (!hasDetection) {
+            finalStatus = result.status;
+            finalJobId = result.jobId;
+          }
           console.log(`동물 감지 결과: 상태=${result.status}, jobId=${result.jobId}`);
         }
         
@@ -159,11 +233,18 @@ async function scanAndProcessNewMedia() {
         const result = await submitMediaToAI(`face/${file}`, 'human', false);
         
         if (result) {
-          // 마지막 결과만 저장 (순서대로 처리되므로 마지막이 최종 상태)
-          latestIsOwner = result.isOwner;
-          finalStatus = result.status;
-          finalJobId = result.jobId;
-          console.log(`사람 감지 결과: 상태=${result.status}, jobId=${result.jobId}, 주인여부=${latestIsOwner}`);
+          // 주인 아닌 사람은 가장 높은 우선순위 (무조건 갱신)
+          if (result.status === STATUS.HUMAN_ALERT) {
+            finalStatus = result.status;
+            finalJobId = result.jobId;
+            hasDetection = true;
+          } 
+          // 동물 감지가 없는 경우에만 normal 상태 갱신
+          else if (!hasDetection) {
+            finalStatus = result.status;
+            finalJobId = result.jobId;
+          }
+          console.log(`사람 감지 결과: 상태=${result.status}, jobId=${result.jobId}, 주인여부=${result.isOwner}`);
         }
         
         // 데모를 위해 각 파일 처리 사이에 약간의 지연 추가
@@ -172,35 +253,17 @@ async function scanAndProcessNewMedia() {
     }
     
     // 모든 이미지 처리 후 최종 상태 업데이트
-    console.log(`처리 완료 - 최종 상태: ${finalStatus}, 최종 jobId: ${finalJobId}, 현재 상태: ${currentStatus}`);
+    console.log(`처리 완료 - 최종 상태: ${finalStatus}, 최종 jobId: ${finalJobId}, 현재 상태: ${currentStatus}, 감지 여부: ${hasDetection}`);
 
     if (finalJobId) {
-      // 기존 상태 저장
-      const previousStatus = currentStatus;
-      const previousJobId = currentStatusJobId;
-      
-      // 가장 최근 작업 정보 가져오기
-      const latestJobStatus = database.getJobStatus(finalJobId);
-      
-      if (latestJobStatus) {
-        // 최신 상태 반영
-        currentStatus = latestJobStatus.status || finalStatus;
-        currentStatusJobId = finalJobId;
+      const jobStatus = database.getJobStatus(finalJobId);
+      if (jobStatus) {
+        updateSystemStatus(finalStatus, finalJobId, 'scan_result');
         
-        console.log(`최신 작업 기반 상태 업데이트: ${previousStatus} -> ${currentStatus}`);
-      } else {
-        // 작업 정보가 없는 경우 기본값 사용
-        currentStatus = finalStatus;
-        currentStatusJobId = finalJobId;
-      }
-      
-      console.log(`상태 업데이트: ${previousStatus} -> ${currentStatus}, jobId: ${previousJobId} -> ${currentStatusJobId}`);
-      
-      // 알림 추가 (경보 상태에만)
-      if (currentStatus !== STATUS.NORMAL) {
-        const jobStatus = database.getJobStatus(finalJobId);
-        if (jobStatus) {
-          database.addAlert(currentStatus, jobStatus);
+        // 알림 추가 (경보 상태에만)
+        if (finalStatus !== STATUS.NORMAL) {
+          database.addAlert(finalStatus, jobStatus);
+          console.log(`알림 추가됨: ${finalStatus}`);
         }
       }
     }
@@ -263,7 +326,7 @@ async function submitMediaToAI(imagePath, category, updateStatusImmediately = tr
     // 상태 및 감지된 객체 처리
     let detectedStatus = STATUS.NORMAL;
     let detectedAnimals = [];
-    let isOwner = false; // 주인 여부
+    let isOwner = true; // 기본값 true (주인)
     
     if (response.data) {
       // 동물 카테고리 처리
@@ -285,13 +348,6 @@ async function submitMediaToAI(imagePath, category, updateStatusImmediately = tr
         if (detectedAnimals.length > 0) {
           detectedStatus = STATUS.ANIMAL_ALERT;
           console.log(`동물 감지됨: ${detectedAnimals.join(', ')}, 상태=${detectedStatus}`);
-          
-          // !!! 중요 - 동물 감지 시 바로 전역 상태 업데이트 !!!
-          if (updateStatusImmediately === false) {
-            console.log(`동물 감지 시 전역 변수 강제 업데이트 (${jobId})`);
-            currentStatus = STATUS.ANIMAL_ALERT;
-            currentStatusJobId = jobId;
-          }
         } else {
           detectedStatus = STATUS.NORMAL;
           console.log(`동물 감지 안됨: 상태=${detectedStatus}`);
@@ -339,16 +395,10 @@ async function submitMediaToAI(imagePath, category, updateStatusImmediately = tr
     }
     
     // 전체 시스템 상태 업데이트 (즉시 업데이트하는 경우)
-    if (detectedStatus === STATUS.NORMAL) {
-      // 정상 상태로 변경
-      currentStatus = STATUS.NORMAL;
-      currentStatusJobId = jobId;
-    } else {
-      // 경보 상태로 변경
-      currentStatus = detectedStatus;
-      currentStatusJobId = jobId;
-      
-      // 알림 추가 (경보 상태에만 알림 생성)
+    updateSystemStatus(detectedStatus, jobId, `immediate_${category}`);
+    
+    // 알림 추가 (경보 상태에만)
+    if (detectedStatus !== STATUS.NORMAL) {
       database.addAlert(detectedStatus, {
         jobId,
         imageId: fileName,
@@ -359,9 +409,6 @@ async function submitMediaToAI(imagePath, category, updateStatusImmediately = tr
         isOwner: category === 'human' ? isOwner : undefined
       });
     }
-    
-    // 디버그 정보 추가 - 상태값 설정 확인
-    console.log(`${category} 카테고리 최종 상태: ${detectedStatus}`);
     
     return jobId;
   } catch (error) {
@@ -385,16 +432,16 @@ app.get('/api/job-status/:jobId', async (req, res) => {
         
         if (response.data && response.data.status) {
           if (response.data.completed) {
-            currentStatus = response.data.status;
+            updateSystemStatus(response.data.status, jobId, 'ai_server_job_status');
           }
           
           res.json({
             success: true,
             status: currentStatus,
             jobDetails: response.data
-        });
-        return;
-    }
+          });
+          return;
+        }
       } catch (aiError) {
         return res.status(404).json({ 
           success: false, 
@@ -422,228 +469,176 @@ app.get('/api/status', (req, res) => {
   console.log("\n===== 상태 요청 받음 =====");
   console.log(`현재 전역 상태: currentStatus=${currentStatus}, currentStatusJobId=${currentStatusJobId}`);
   
+  // 응답 준비 - 전역 변수 값을 직접 사용
+  const response = {
+    status: currentStatus,
+    jobId: currentStatusJobId || "no_job_id",
+  };
+  
+  // 필요한 추가 데이터 조회
   const lastAlert = database.getLastAlert();
+  if (lastAlert) {
+    response.lastUpdated = lastAlert.timestamp;
+  }
   
-  // 감지된 동물 목록 및 사람 정보 초기화
-  let detectedAnimals = [];
-  let animalNames = [];
-  let isOwner = undefined;
-  let hasDetection = false;  // 감지 여부 플래그
-  
+  // 현재 작업 상태 조회
   if (currentStatusJobId) {
     const jobStatus = database.getJobStatus(currentStatusJobId);
     console.log("현재 작업 상태:", jobStatus);
     
     if (jobStatus) {
-      // 최근 작업 상태 기반으로 현재 상태 업데이트
-      if (jobStatus.status && jobStatus.status !== STATUS.NORMAL) {
-        console.log(`작업 상태 기반 업데이트: ${currentStatus} -> ${jobStatus.status}`);
-        currentStatus = jobStatus.status;
-        hasDetection = true;
-      } else if (jobStatus.status === STATUS.NORMAL && !hasDetection) {
-        // 감지가 없는 경우에만 정상 상태로 설정
-        currentStatus = STATUS.NORMAL;
+      // 동물 관련 정보 추가 (동물 경보 상태인 경우)
+      if (currentStatus === STATUS.ANIMAL_ALERT && jobStatus.detectedAnimals) {
+        const detectedAnimals = jobStatus.detectedAnimals || [];
+        const animalNames = detectedAnimals.map(animal => ({
+          code: animal,
+          name: database.animal_types[animal] || animal
+        }));
+        
+        response.detectedAnimals = detectedAnimals;
+        response.animalInfo = animalNames;
       }
       
-      // 사람 정보 처리 (사람 감지가 우선)
-      if (jobStatus.category === 'human') {
-        isOwner = jobStatus.isOwner;
-        
-        // 외부인이 감지된 경우
-        if (isOwner === false) {
-          currentStatus = STATUS.HUMAN_ALERT;
-          hasDetection = true;
-          console.log("외부인 감지로 상태 설정: HUMAN_ALERT");
-        } else if (isOwner === true && !hasDetection) {
-          // 주인이 감지되고 다른 감지가 없는 경우
-          currentStatus = STATUS.NORMAL;
-          console.log("주인 감지로 상태 설정: NORMAL");
-        }
-      }
-      
-      // 동물 정보 처리
-      if (jobStatus.detectedAnimals && jobStatus.detectedAnimals.length > 0) {
-        detectedAnimals = jobStatus.detectedAnimals;
-        
-        // 동물 이름을 한글로 변환
-        animalNames = detectedAnimals.map(animal => {
-          return {
-            code: animal,
-            name: database.animal_types[animal] || animal
-          };
-        });
-        
-        // 동물이 감지된 경우 (다른 감지가 없는 경우에만)
-        if (!hasDetection && jobStatus.category === 'animal') {
-          currentStatus = STATUS.ANIMAL_ALERT;
-          hasDetection = true;
-          console.log("동물 감지로 상태 설정: ANIMAL_ALERT");
-        }
+      // 사람 관련 정보 추가 (사람 경보 상태인 경우)
+      if (currentStatus === STATUS.HUMAN_ALERT && jobStatus.category === 'human') {
+        response.isOwner = jobStatus.isOwner;
       }
     }
   }
   
-  // 응답 구성
-  const response = {
-    status: currentStatus,
-    jobId: currentStatusJobId || "no_job_id",
-    lastUpdated: lastAlert?.timestamp
-  };
-  
-  // 동물 관련 정보 추가 (있는 경우)
-  if (currentStatus === STATUS.ANIMAL_ALERT) {
-    response.detectedAnimals = detectedAnimals;
-    response.animalInfo = animalNames;
-  }
-  
-  // 사람 관련 정보 추가 (있는 경우)
-  if (currentStatus === STATUS.HUMAN_ALERT) {
-    response.isOwner = isOwner;
-  }
-  
+  // 항상 응답에 현재 상태 로깅
   console.log("최종 응답:", response);
   res.json(response);
 });
 
 // 이미지 목록 조회 API
 app.get('/api/media/list', (req, res) => {
-    try {
-        const category = req.query.category || 'all'; // 'all', 'animals', 'face'
-        let result = {};
-        
-        if (category === 'all' || category === 'animals') {
-            const animalsPath = path.join(MEDIA_PATH, 'animals');
-            if (fs.existsSync(animalsPath)) {
-                result.animals = fs.readdirSync(animalsPath).map(file => ({
-                    id: file,
-                    path: `animals/${file}`,
-                    category: 'animal'
-                }));
-            } else {
-                result.animals = [];
-            }
-        }
-        
-        if (category === 'all' || category === 'face') {
-            const facePath = path.join(MEDIA_PATH, 'face');
-            if (fs.existsSync(facePath)) {
-                result.face = fs.readdirSync(facePath).map(file => ({
-                    id: file,
-                    path: `face/${file}`,
-                    category: 'human'
-                }));
-            } else {
-                result.face = [];
-            }
-        }
-        
-        res.json({ success: true, files: result });
-    } catch (error) {
-        console.error('이미지 목록 조회 오류:', error);
-        res.status(500).json({ success: false, message: '이미지 목록 조회 중 오류가 발생했습니다' });
+  try {
+    const category = req.query.category || 'all'; // 'all', 'animals', 'face'
+    let result = {};
+    
+    if (category === 'all' || category === 'animals') {
+      const animalsPath = path.join(MEDIA_PATH, 'animals');
+      if (fs.existsSync(animalsPath)) {
+        result.animals = fs.readdirSync(animalsPath).map(file => ({
+          id: file,
+          path: `animals/${file}`,
+          category: 'animal'
+        }));
+      } else {
+        result.animals = [];
+      }
     }
+    
+    if (category === 'all' || category === 'face') {
+      const facePath = path.join(MEDIA_PATH, 'face');
+      if (fs.existsSync(facePath)) {
+        result.face = fs.readdirSync(facePath).map(file => ({
+          id: file,
+          path: `face/${file}`,
+          category: 'human'
+        }));
+      } else {
+        result.face = [];
+      }
+    }
+    
+    res.json({ success: true, files: result });
+  } catch (error) {
+    console.error('이미지 목록 조회 오류:', error);
+    res.status(500).json({ success: false, message: '이미지 목록 조회 중 오류가 발생했습니다' });
+  }
 });
 
 // 샘플 미디어 업로드 API (데모용)
 app.post('/api/media/upload', (req, res) => {
-    // 실제 구현에서는 multer 같은 라이브러리로 파일 업로드 처리
-    // 여기서는 데모용이므로 API만 정의
-    res.json({ success: true, message: '파일이 성공적으로 업로드되었습니다' });
+  // 실제 구현에서는 multer 같은 라이브러리로 파일 업로드 처리
+  // 여기서는 데모용이므로 API만 정의
+  res.json({ success: true, message: '파일이 성공적으로 업로드되었습니다' });
 });
 
 // 상태 업데이트 API
 app.post('/api/update-status', async (req, res) => {
-    const { status, jobId } = req.body;
+  const { status, jobId } = req.body;
+  
+  console.log("상태 업데이트 요청:", req.body);
+  
+  if (Object.values(STATUS).includes(status)) {
+    // 새 작업 ID 사용 또는 생성
+    const newJobId = jobId || `manual_${Date.now()}`;
     
-    console.log("상태 업데이트 요청:", req.body);
+    // 상태 업데이트
+    updateSystemStatus(status, newJobId, 'manual_update');
     
-    if (Object.values(STATUS).includes(status)) {
-        currentStatus = status;
-        
-        // jobId가 제공되면 사용, 아니면 생성
-        currentStatusJobId = jobId || `manual_${Date.now()}`;
-        
-        // 작업 상태 저장
-        database.updateJobStatus(currentStatusJobId, {
-          status: currentStatus,
-          startTime: new Date().toISOString(),
-          completedTime: new Date().toISOString(),
-          completed: true,
-          isManualUpdate: true,
-          // 동물 관련 정보 추가 (동물 알림인 경우)
-          ...(status === STATUS.ANIMAL_ALERT ? {
-            category: 'animal',
-            detectedAnimals: ['Gorani']  // 기본 동물 추가
-          } : {}),
-          // 사람 관련 정보 추가 (사람 알림인 경우)
-          ...(status === STATUS.HUMAN_ALERT ? {
-            category: 'human',
-            isOwner: false
-          } : {})
-        });
-        
-        // 알림 추가 (경보 상태에만)
-        if (status !== STATUS.NORMAL) {
-          const jobStatus = database.getJobStatus(currentStatusJobId);
-          if (jobStatus) {
-            database.addAlert(status, jobStatus);
-          }
-        }
-        
-        console.log(`상태 업데이트: ${status}, jobId: ${currentStatusJobId}`);
-        res.json({ 
-          success: true, 
-          status: currentStatus,
-          jobId: currentStatusJobId
-        });
-    } else {
-        res.status(400).json({ success: false, message: '잘못된 상태값입니다' });
-    }
-});
-
-// 시뮬레이션을 위한 상태 변경 API (데모 테스트용)
-app.post('/api/simulate', (req, res) => {
-    const { event, simulationJobId } = req.body;
-    
-    // 시뮬레이션용 jobId 생성 또는 사용
-    const jobId = simulationJobId || `simulation_${Date.now()}`;
-    
-    switch (event) {
-        case 'animal':
-            currentStatus = STATUS.ANIMAL_ALERT;
-            break;
-        case 'human':
-            currentStatus = STATUS.HUMAN_ALERT;
-            break;
-        case 'weather':
-            currentStatus = STATUS.WEATHER_ALERT;
-            break;
-        case 'normal':
-        default:
-            currentStatus = STATUS.NORMAL;
-    }
-    
-    // 현재 상태의 jobId 업데이트
-    currentStatusJobId = jobId;
-    
-    // 시뮬레이션 작업 상태 저장 (선택 사항)
-    database.updateJobStatus(jobId, {
-      status: currentStatus,
+    // 작업 상태 저장
+    database.updateJobStatus(newJobId, {
+      status: status,
       startTime: new Date().toISOString(),
       completedTime: new Date().toISOString(),
       completed: true,
-      isSimulation: true
+      isManualUpdate: true,
+      // 동물 관련 정보 추가 (동물 알림인 경우)
+      ...(status === STATUS.ANIMAL_ALERT ? {
+        category: 'animal',
+        detectedAnimals: ['Gorani']  // 기본 동물 추가
+      } : {}),
+      // 사람 관련 정보 추가 (사람 알림인 경우)
+      ...(status === STATUS.HUMAN_ALERT ? {
+        category: 'human',
+        isOwner: false
+      } : {})
     });
     
-    res.json({
+    // 알림 추가 (경보 상태에만)
+    if (status !== STATUS.NORMAL) {
+      const jobStatus = database.getJobStatus(newJobId);
+      if (jobStatus) {
+        database.addAlert(status, jobStatus);
+      }
+    }
+    
+    res.json({ 
       success: true, 
       status: currentStatus,
       jobId: currentStatusJobId
     });
+  } else {
+    res.status(400).json({ success: false, message: '잘못된 상태값입니다' });
+  }
 });
 
-// 서버 시작 시 모니터링 시작
-startMediaMonitoring();
+// 상태 리셋 API 엔드포인트
+app.post('/api/reset-status', (req, res) => {
+  const result = resetToNormal('manual_request');
+  res.json({
+    success: true,
+    status: result.status,
+    jobId: result.jobId,
+    message: `상태가 정상으로 리셋되었습니다 (이전 상태: ${result.previousStatus})`
+  });
+});
+
+// 디버깅용 API
+app.get('/api/debug/status', (req, res) => {
+  const allJobs = database.getAllJobStatuses();
+  const normalJobs = allJobs.filter(job => job.status === STATUS.NORMAL);
+  const alertJobs = allJobs.filter(job => job.status !== STATUS.NORMAL);
+  
+  res.json({
+    currentState: {
+      status: currentStatus,
+      jobId: currentStatusJobId,
+      hasResetTimer: autoResetTimer !== null
+    },
+    currentJob: currentStatusJobId ? database.getJobStatus(currentStatusJobId) : null,
+    jobCounts: {
+      total: allJobs.length,
+      normal: normalJobs.length,
+      alerts: alertJobs.length
+    },
+    recentJobs: allJobs.slice(0, 5) // 최근 5개 작업
+  });
+});
 
 
 
