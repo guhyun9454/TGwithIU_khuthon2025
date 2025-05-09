@@ -16,14 +16,14 @@ IMAGE_BASE  = os.path.join(SOURCE_BASE, "원천데이터")
 TARGET_IMAGES = os.path.join(BASE_DIR, "images", "train")
 TARGET_LABELS = os.path.join(BASE_DIR, "labels", "train")
 
-CLASS_MAP   = {"고라니":0, "멧돼지":1, "너구리":2, "멧토끼":3, "노루":4}
-ID_TO_ENG   = {0:"Gorani", 1:"Maet-dwaeji", 2:"Neoguri", 3:"Meet-ttokki", 4:"Noru"}
+CLASS_MAP = {"고라니":0, "멧돼지":1, "너구리":2, "멧토끼":3, "노루":4}
+ID_TO_ENG = {0:"Gorani", 1:"Maet-dwaeji", 2:"Neoguri", 3:"Meet-ttokki", 4:"Noru"}
 
 os.makedirs(TARGET_IMAGES, exist_ok=True)
 os.makedirs(TARGET_LABELS, exist_ok=True)
 
 # -------------------------------------------------------------------------
-# 처리 루프: 종별로 JSON → 이미지 복사 & 라벨 생성
+# 처리 루프: 종별 JSON → 이미지 복사 & 라벨 생성
 # -------------------------------------------------------------------------
 for species, cls_id in CLASS_MAP.items():
     counter = 0
@@ -38,37 +38,37 @@ for species, cls_id in CLASS_MAP.items():
         if not os.path.isdir(label_dir) or not os.path.isdir(image_dir):
             continue
 
-        # 각 JSON 파일 처리 진행바
+        # JSON 파일별 진행바 표시
         for fname in tqdm(os.listdir(label_dir), desc=f"[{species}]", unit="file"):
             if not fname.endswith(".json"):
                 continue
             data = json.load(open(os.path.join(label_dir, fname), encoding="utf-8"))
 
-            # day="day"인 이미지에 한해
+            # day="day"인 이미지에 한해 처리
             for img in data.get("images", []):
                 if img.get("day") != "day":
                     continue
-                src_img   = os.path.join(image_dir, img["file_name"])
+                src_img = os.path.join(image_dir, img["file_name"])
                 if not os.path.exists(src_img):
                     continue
 
-                # 새 파일명 생성
-                counter   += 1
-                new_base   = f"{cls_id}_{eng_name}{counter}"
-                dst_img    = os.path.join(TARGET_IMAGES, new_base + ".jpg")
-                dst_label  = os.path.join(TARGET_LABELS, new_base + ".txt")
+                # 새 파일명: 클래스ID_영문명+순번
+                counter += 1
+                new_base = f"{cls_id}_{eng_name}{counter}"
+                dst_img  = os.path.join(TARGET_IMAGES, new_base + ".jpg")
+                dst_lbl  = os.path.join(TARGET_LABELS, new_base + ".txt")
 
-                # 이미지 복사 및 이름 변경
+                # 이미지 복사 & 이름 변경
                 shutil.copy2(src_img, dst_img)
 
-                # YOLO 포맷 라벨 생성
-                w, h      = img["width"], img["height"]
-                img_id    = img.get("id", img.get("image_id"))
-                anns      = [
+                # YOLO 라벨 생성
+                w, h   = img["width"], img["height"]
+                img_id = img.get("id", img.get("image_id"))
+                anns   = [
                     a for a in data.get("annotations", [])
                     if a.get("image_id", a.get("id")) == img_id
                 ]
-                lines     = []
+                lines = []
                 for ann in anns:
                     (x1, y1), (x2, y2) = ann["bbox"]
                     cx = ((x1 + x2) / 2) / w
@@ -77,5 +77,11 @@ for species, cls_id in CLASS_MAP.items():
                     bh = (y2 - y1) / h
                     lines.append(f"{cls_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
 
-                with open(dst_label, "w", encoding="utf-8") as lf:
-                    lf.write("\n".join(lines))
+                # 빈 라벨 파일 방지
+                if lines:
+                    with open(dst_lbl, "w", encoding="utf-8") as lf:
+                        lf.write("\n".join(lines))
+                else:
+                    # 혹시 이전 실행에서 남은 빈 파일이 있으면 삭제
+                    if os.path.exists(dst_lbl):
+                        os.remove(dst_lbl)
