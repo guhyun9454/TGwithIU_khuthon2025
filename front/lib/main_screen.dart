@@ -13,7 +13,6 @@ class _MainScreenState extends State<MainScreen> {
   List<String> logMessages = ["특이사항이 없습니다."];
   String currentTime = "";
   String currentImageUrl = "";
-  String previousImageUrl = "";
   bool isPaused = false;
   Timer? statusTimer;
   final ScrollController _logScrollController = ScrollController();
@@ -50,14 +49,18 @@ class _MainScreenState extends State<MainScreen> {
               break;
             case "animal_alert":
               newStatus = data["animalInfo"]
-                  .map((a) => a["name"] + "가 나타났습니다.")
-                  .join(", ");
+                      ?.map((a) => a["name"] + "가 나타났습니다.")
+                      .join(", ") ??
+                  "동물이 감지되었습니다.";
               break;
             case "human_alert":
               newStatus = "외부인이 나타났습니다.";
               break;
             case "weather_alert":
               newStatus = "악천후입니다. 작물 상태를 확인하세요.";
+              break;
+            case "processing":
+              newStatus = "처리 중입니다...";
               break;
             default:
               newStatus = "이상이 없습니다.";
@@ -66,15 +69,16 @@ class _MainScreenState extends State<MainScreen> {
           if (newStatus != statusMessage) {
             setState(() {
               statusMessage = newStatus;
-              logMessages.insert(0, statusMessage);
+              logMessages.add(statusMessage);
               if (logMessages.length > 50) logMessages.removeAt(0);
             });
           }
 
-          if (jobId.isNotEmpty) _fetchImage(jobId);
+          if (jobId.isNotEmpty && data["status"] != "processing")
+            _fetchImage(jobId);
         }
       } catch (e) {
-        print("Error fetching status: $e");
+        // 에러 메시지 제거
       }
     });
   }
@@ -82,15 +86,14 @@ class _MainScreenState extends State<MainScreen> {
   void _fetchImage(String jobId) async {
     try {
       final response = await http
-          .get(Uri.parse('http://localhost:9454/api/image-result/$jobId'));
+          .get(Uri.parse('http://localhost:9454/api/image-result/$jobId?'));
       if (response.statusCode == 200) {
         setState(() {
-          previousImageUrl = currentImageUrl;
-          currentImageUrl = 'http://localhost:9454/api/image-result/$jobId';
+          currentImageUrl = 'http://localhost:9454/api/image-result/$jobId?';
         });
       }
     } catch (e) {
-      print("Error fetching image: $e");
+      // 에러 메시지 제거
     }
   }
 
@@ -100,7 +103,6 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   String _twoDigits(int n) => n.toString().padLeft(2, '0');
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -133,9 +135,6 @@ class _MainScreenState extends State<MainScreen> {
             SizedBox(height: 10),
             Stack(
               children: [
-                if (previousImageUrl.isNotEmpty)
-                  Image.network(previousImageUrl,
-                      fit: BoxFit.cover, width: double.infinity, height: 250),
                 if (currentImageUrl.isNotEmpty)
                   Image.network(currentImageUrl,
                       fit: BoxFit.cover, width: double.infinity, height: 250),
@@ -172,7 +171,7 @@ class _MainScreenState extends State<MainScreen> {
               ),
               child: ListView.builder(
                 controller: _logScrollController,
-                reverse: true,
+                reverse: false,
                 itemCount: logMessages.length,
                 itemBuilder: (context, index) => Container(
                   padding: EdgeInsets.all(12),
@@ -180,7 +179,7 @@ class _MainScreenState extends State<MainScreen> {
                   decoration: BoxDecoration(
                     border: Border.all(color: Color(0xFFDFDFDF)),
                     borderRadius: BorderRadius.circular(22),
-                    color: logMessages[index].contains("이상이 없습니다.")
+                    color: logMessages[index].contains("특이사항이 없습니다.")
                         ? Color(0xFF27B155).withOpacity(0.1)
                         : Color(0xFFD50000).withOpacity(0.1),
                   ),
@@ -190,14 +189,14 @@ class _MainScreenState extends State<MainScreen> {
                         width: 60,
                         height: 35,
                         decoration: BoxDecoration(
-                          color: logMessages[index].contains("이상이 없습니다.")
+                          color: logMessages[index].contains("특이사항이 없습니다.")
                               ? Color(0xFF27B155)
                               : Color(0xFFD50000),
                           borderRadius: BorderRadius.circular(15),
                         ),
                         alignment: Alignment.center,
                         child: Text(
-                          logMessages[index].contains("이상이 없습니다.")
+                          logMessages[index].contains("특이사항이 없습니다.")
                               ? "안전"
                               : "경고",
                           style: TextStyle(color: Colors.white, fontSize: 20),
