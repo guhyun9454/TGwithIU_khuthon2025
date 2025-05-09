@@ -1,0 +1,8 @@
+path: /data/dlarlgus0619/g/khuthon/dataset
+train: images/train
+names:
+  0: Gorani
+  1: Maet-dwaeji
+  2: Neoguri
+  3: Meet-ttokki
+  4: Noru
