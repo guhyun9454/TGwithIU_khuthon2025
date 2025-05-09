@@ -19,7 +19,7 @@ app.listen(PORT, () => {
 const database = require('./database/index')            //데이터베이스 파일 경로
 
 // AI 서버 URL
-const AI_SERVER_URL = 'http://localhost:8000'; // AI 서버 주소 (FastAPI)
+const AI_SERVER_URL = 'http://localhost:9454'; // AI 서버 주소 (FastAPI)
 
 // 상태 정의
 const STATUS = {
@@ -147,7 +147,7 @@ async function submitMediaToAI(imagePath, category) {
     formData.append('category', category);
     
     // AI 서버 엔드포인트 선택 (카테고리별 다른 엔드포인트 사용)
-    const endpoint = category === 'animal' ? 'analyze-animal' : 'analyze-human';
+    const endpoint = category === 'animal' ? 'api/detect-animals' : 'api/detect-human';
     
     // 분석 요청
     const response = await axios.post(`${AI_SERVER_URL}/${endpoint}`, formData, {
