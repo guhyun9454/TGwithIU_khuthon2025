@@ -154,37 +154,45 @@ async function submitMediaToAI(imagePath, category) {
       headers: formData.getHeaders()
     });
     
-    // 동물 클래스 확인 (Gorani, Met-dwaeji, Neoguri, Met-tokki, Noru)
-    const animalClasses = ['Gorani', 'Met-dwaeji', 'Neoguri', 'Met-tokki', 'Noru'];
-    
     // 상태 및 감지된 객체 처리
     let detectedStatus = STATUS.NORMAL;
     let detectedAnimals = [];
+    let isOwner = false; // 주인 여부
     
-    if (response.data && response.data.objects) {
-      // 감지된 객체 목록
-      const detectedObjects = response.data.objects;
-      // 동물 카테고리인 경우 동물 감지 확인
-      if (category === 'animal') {
+    if (response.data) {
+      // 동물 카테고리 처리
+      if (category === 'animal' && response.data.objects) {
+        // 동물 클래스 확인 (Gorani, Met-dwaeji, Neoguri, Met-tokki, Noru)
+        const animalClasses = ['Gorani', 'Met-dwaeji', 'Neoguri', 'Met-tokki', 'Noru'];
+        // 감지된 객체 목록
+        const detectedObjects = response.data.objects;
+        
         // 감지된 객체 중 지정된 동물 클래스가 있는지 확인
         detectedAnimals = detectedObjects.filter(obj => animalClasses.includes(obj));
+        
         console.log('===== 동물 감지 결과 =====');
         console.log('파일:', imagePath);
         console.log('감지된 객체들:', detectedObjects);
         console.log('감지된 동물들:', detectedAnimals);
         console.log('========================');
+        
         // 감지된 동물이 있으면 animal_alert 상태로 설정
         if (detectedAnimals.length > 0) {
           detectedStatus = STATUS.ANIMAL_ALERT;
         }
       } 
-      // 사람 카테고리인 경우 사람 감지 확인
+      // 사람 카테고리 처리 (새로운 로직으로 변경)
       else if (category === 'human') {
-        // 사람이 감지되었는지 확인
-        const detectedPersons = detectedObjects.filter(obj => obj === 'person');
+        // isOwner 값 확인
+        isOwner = response.data.isOwner === true;
         
-        // 사람이 감지되면 human_alert 상태로 설정
-        if (detectedPersons.length > 0) {
+        console.log('===== 사람 감지 결과 =====');
+        console.log('파일:', imagePath);
+        console.log('주인 여부:', isOwner);
+        console.log('========================');
+        
+        // 주인이 아니면 human_alert 상태로 설정
+        if (!isOwner) {
           detectedStatus = STATUS.HUMAN_ALERT;
         }
       }
@@ -196,7 +204,8 @@ async function submitMediaToAI(imagePath, category) {
       completed: true,
       completedTime: new Date().toISOString(),
       detectedObjects: response.data.objects || [],
-      detectedAnimals: detectedAnimals
+      detectedAnimals: detectedAnimals,
+      isOwner: category === 'human' ? isOwner : undefined // 사람 카테고리인 경우에만 isOwner 저장
     });
     
     // 전체 시스템 상태 업데이트 (NORMAL로도 업데이트 가능하도록 수정)
@@ -216,7 +225,8 @@ async function submitMediaToAI(imagePath, category) {
         imagePath: imagePath,
         category: category,
         detectedObjects: response.data.objects || [],
-        detectedAnimals: detectedAnimals
+        detectedAnimals: detectedAnimals,
+        isOwner: category === 'human' ? isOwner : undefined
       });
     }
     
@@ -278,32 +288,53 @@ app.get('/api/job-status/:jobId', async (req, res) => {
 app.get('/api/status', (req, res) => {
   const lastAlert = database.getLastAlert();
   
-  // 감지된 동물 목록 (있는 경우)
+  // 감지된 동물 목록 및 사람 정보 초기화
   let detectedAnimals = [];
-  let animalNames = []; // 한글 동물 이름 배열 추가
+  let animalNames = [];
+  let isOwner = undefined;
   
   if (currentStatusJobId) {
     const jobStatus = database.getJobStatus(currentStatusJobId);
-    if (jobStatus && jobStatus.detectedAnimals) {
-      detectedAnimals = jobStatus.detectedAnimals;
+    if (jobStatus) {
+      // 동물 정보 처리
+      if (jobStatus.detectedAnimals) {
+        detectedAnimals = jobStatus.detectedAnimals;
+        
+        // 동물 이름을 한글로 변환
+        animalNames = detectedAnimals.map(animal => {
+          return {
+            code: animal,
+            name: database.animal_types[animal] || animal
+          };
+        });
+      }
       
-      // 동물 이름을 한글로 변환
-      animalNames = detectedAnimals.map(animal => {
-        return {
-          code: animal,
-          name: database.animal_types[animal] || animal
-        };
-      });
+      // 사람 정보 처리
+      if (jobStatus.category === 'human') {
+        isOwner = jobStatus.isOwner;
+      }
     }
   }
   
-  res.json({ 
+  // 응답 구성
+  const response = {
     status: currentStatus,
     jobId: currentStatusJobId,
-    lastUpdated: lastAlert?.timestamp,
-    detectedAnimals: detectedAnimals, // 원래 코드명
-    animalInfo: animalNames // 한글 이름이 포함된 정보 추가
-  });
+    lastUpdated: lastAlert?.timestamp
+  };
+  
+  // 동물 관련 정보 추가 (있는 경우)
+  if (currentStatus === STATUS.ANIMAL_ALERT) {
+    response.detectedAnimals = detectedAnimals;
+    response.animalInfo = animalNames;
+  }
+  
+  // 사람 관련 정보 추가 (있는 경우)
+  if (currentStatus === STATUS.HUMAN_ALERT) {
+    response.isOwner = isOwner;
+  }
+  
+  res.json(response);
 });
 
 // 이미지 목록 조회 API
