@@ -172,9 +172,18 @@ async function scanAndProcessNewMedia() {
     }
     
     // 모든 이미지 처리 후 최종 상태 업데이트
+    console.log(`처리 완료 - 최종 상태: ${finalStatus}, 최종 jobId: ${finalJobId}, 현재 상태: ${currentStatus}`);
+
     if (finalJobId) {
+      // 기존 상태 저장
+      const previousStatus = currentStatus;
+      const previousJobId = currentStatusJobId;
+      
+      // 상태 업데이트
       currentStatus = finalStatus;
       currentStatusJobId = finalJobId;
+      
+      console.log(`상태 업데이트: ${previousStatus} -> ${currentStatus}, jobId: ${previousJobId} -> ${currentStatusJobId}`);
       
       // 알림 추가 (경보 상태에만)
       if (finalStatus !== STATUS.NORMAL) {
@@ -267,6 +276,10 @@ async function submitMediaToAI(imagePath, category, updateStatusImmediately = tr
         // 감지된 동물이 있으면 animal_alert 상태로 설정
         if (detectedAnimals.length > 0) {
           detectedStatus = STATUS.ANIMAL_ALERT;
+          console.log(`동물 감지됨: 상태=${detectedStatus}`);
+        } else {
+          detectedStatus = STATUS.NORMAL;
+          console.log(`동물 감지 안됨: 상태=${detectedStatus}`);
         }
       } 
       // 사람 카테고리 처리 (새로운 로직으로 변경)
@@ -282,6 +295,10 @@ async function submitMediaToAI(imagePath, category, updateStatusImmediately = tr
         // 주인이 아니면 human_alert 상태로 설정
         if (!isOwner) {
           detectedStatus = STATUS.HUMAN_ALERT;
+          console.log(`외부인 감지됨: 상태=${detectedStatus}`);
+        } else {
+          detectedStatus = STATUS.NORMAL;
+          console.log(`주인 감지됨: 상태=${detectedStatus}`);
         }
       }
     }
