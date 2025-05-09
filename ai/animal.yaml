@@ -1,5 +1,6 @@
 path: /data/dlarlgus0619/g/khuthon/dataset
 train: images/train
+val:
 names:
   0: Gorani
   1: Maet-dwaeji
