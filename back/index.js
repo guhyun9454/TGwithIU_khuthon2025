@@ -199,12 +199,17 @@ async function submitMediaToAI(imagePath, category) {
       detectedAnimals: detectedAnimals
     });
     
-    // 전체 시스템 상태 업데이트 (정상 상태가 아닌 경우에만)
-    if (detectedStatus !== STATUS.NORMAL) {
+    // 전체 시스템 상태 업데이트 (NORMAL로도 업데이트 가능하도록 수정)
+    if (detectedStatus === STATUS.NORMAL) {
+      // 정상 상태로 변경
+      currentStatus = STATUS.NORMAL;
+      currentStatusJobId = jobId;
+    } else {
+      // 경보 상태로 변경
       currentStatus = detectedStatus;
       currentStatusJobId = jobId;
       
-      // 알림 추가
+      // 알림 추가 (경보 상태에만 알림 생성)
       database.addAlert(detectedStatus, {
         jobId,
         imageId: fileName,
@@ -244,9 +249,9 @@ app.get('/api/job-status/:jobId', async (req, res) => {
             success: true,
             status: currentStatus,
             jobDetails: response.data
-          });
-          return;
-        }
+        });
+        return;
+    }
       } catch (aiError) {
         return res.status(404).json({ 
           success: false, 
@@ -272,20 +277,21 @@ app.get('/api/job-status/:jobId', async (req, res) => {
 // 현재 시스템 상태 확인하는 폴링용 API
 app.get('/api/status', (req, res) => {
   const lastAlert = database.getLastAlert();
-  const jobStatus = currentStatusJobId ? database.getJobStatus(currentStatusJobId) : null;
   
   // 감지된 동물 목록 (있는 경우)
   let detectedAnimals = [];
-  if (jobStatus && jobStatus.detectedAnimals) {
-    detectedAnimals = jobStatus.detectedAnimals;
+  if (currentStatusJobId) {
+    const jobStatus = database.getJobStatus(currentStatusJobId);
+    if (jobStatus && jobStatus.detectedAnimals) {
+      detectedAnimals = jobStatus.detectedAnimals;
+    }
   }
   
   res.json({ 
     status: currentStatus,
     jobId: currentStatusJobId,
     lastUpdated: lastAlert?.timestamp,
-    detectedAnimals: detectedAnimals, // 감지된 동물 목록 추가
-    details: jobStatus || null
+    detectedAnimals: detectedAnimals // 감지된 동물 목록만 포함
   });
 });
 
@@ -400,7 +406,7 @@ app.post('/api/simulate', (req, res) => {
       isSimulation: true
     });
     
-    res.json({ 
+    res.json({
       success: true, 
       status: currentStatus,
       jobId: currentStatusJobId
