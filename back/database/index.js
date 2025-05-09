@@ -53,8 +53,7 @@ const getLastAlert = () => {
 
 // 미디어 파일 정보 저장
 const mediaFiles = {
-    images: [],
-    videos: []
+    images: []
 };
 
 // 미디어 파일 스캔하기
@@ -74,21 +73,9 @@ const scanMediaFiles = async () => {
             }));
         }
         
-        // 비디오 스캔
-        const videosPath = path.join(baseDir, 'videos');
-        if (fs.existsSync(videosPath)) {
-            const files = await fs2.readdir(videosPath);
-            mediaFiles.videos = files.map(file => ({
-                id: file,
-                path: path.join('videos', file),
-                type: 'video',
-                url: `/media/videos/${file}`
-            }));
-        }
-        
         return mediaFiles;
     } catch (error) {
-        console.error('미디어 파일 스캔 오류:', error);
+        console.error('이미지 파일 스캔 오류:', error);
         return mediaFiles;
     }
 };
@@ -127,6 +114,17 @@ const getAllJobStatuses = (limit = 10) => {
         }));
 };
 
+const processedMediaFiles = new Set();
+
+const addProcessedMediaFile = (mediaId) => {
+    processedMediaFiles.add(mediaId);
+    return true;
+};
+
+const getProcessedMediaFiles = () => {
+    return Array.from(processedMediaFiles);
+};
+
 module.exports = {
     STATUS_TYPES,
     addAlert,
@@ -136,7 +134,9 @@ module.exports = {
     getMediaFiles: () => mediaFiles,
     updateJobStatus,
     getJobStatus,
-    getAllJobStatuses
+    getAllJobStatuses,
+    addProcessedMediaFile,
+    getProcessedMediaFiles
 };
 
 

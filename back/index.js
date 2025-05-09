@@ -31,15 +31,16 @@ const STATUS = {
 
 // 현재 시스템 상태 (기본값: 정상)
 let currentStatus = STATUS.NORMAL;
+// 현재 상태와 관련된 가장 최근 jobId
+let currentStatusJobId = null;
 
-// 이미지/비디오 저장 경로
+// 이미지 저장 경로
 const MEDIA_PATH = path.join(__dirname, 'media');
 
 // 미디어 폴더가 없으면 생성
 if (!fs.existsSync(MEDIA_PATH)) {
     fs.mkdirSync(MEDIA_PATH);
     fs.mkdirSync(path.join(MEDIA_PATH, 'images'));
-    fs.mkdirSync(path.join(MEDIA_PATH, 'videos'));
 }
 
 
@@ -47,6 +48,10 @@ if (!fs.existsSync(MEDIA_PATH)) {
 
 // 백엔드 시작 시 및 주기적으로 미디어 폴더 모니터링
 function startMediaMonitoring() {
+  // 초기 상태 설정
+  currentStatus = STATUS.NORMAL;
+  currentStatusJobId = `init_${Date.now()}`;
+  
   // 초기 폴더 스캔
   scanAndProcessNewMedia();
   
@@ -66,33 +71,26 @@ async function scanAndProcessNewMedia() {
     await database.scanMediaFiles();
     const allFiles = database.getMediaFiles();
     
-    // 새 파일 찾기
+    // 새 이미지 파일 찾기
     const newImageFiles = allFiles.images.filter(img => !processedFiles.includes(img.id));
-    const newVideoFiles = allFiles.videos.filter(vid => !processedFiles.includes(vid.id));
     
     // 새 이미지 파일 처리
     for (const img of newImageFiles) {
       console.log(`새 이미지 발견: ${img.id}`);
-      await submitMediaToAI(img.id, 'image');
-    }
-    
-    // 새 비디오 파일 처리
-    for (const vid of newVideoFiles) {
-      console.log(`새 비디오 발견: ${vid.id}`);
-      await submitMediaToAI(vid.id, 'video');
+      await submitMediaToAI(img.id);
     }
   } catch (error) {
     console.error('미디어 스캔 오류:', error);
   }
 }
 
-// AI 서버에 미디어 제출 함수
-async function submitMediaToAI(mediaId, mediaType) {
+// AI 서버에 이미지 제출 함수
+async function submitMediaToAI(imageId) {
   try {
-    const mediaPath = path.join(MEDIA_PATH, mediaType === 'video' ? 'videos' : 'images', mediaId);
+    const imagePath = path.join(MEDIA_PATH, 'images', imageId);
     
-    if (!fs.existsSync(mediaPath)) {
-      console.error(`파일을 찾을 수 없음: ${mediaPath}`);
+    if (!fs.existsSync(imagePath)) {
+      console.error(`이미지를 찾을 수 없음: ${imagePath}`);
       return;
     }
     
@@ -102,19 +100,17 @@ async function submitMediaToAI(mediaId, mediaType) {
     // 작업 상태 초기화
     database.updateJobStatus(jobId, {
       status: 'processing',
-      mediaId,
-      mediaType,
+      imageId,
       startTime: new Date().toISOString(),
       completed: false
     });
     
     // 처리된 파일 목록에 추가
-    database.addProcessedMediaFile(mediaId);
+    database.addProcessedMediaFile(imageId);
     
     // AI 서버에 전송
     const formData = new FormData();
-    formData.append('file', fs.createReadStream(mediaPath));
-    formData.append('type', mediaType);
+    formData.append('file', fs.createReadStream(imagePath));
     formData.append('job_id', jobId);
     
     // 분석 요청
@@ -132,17 +128,17 @@ async function submitMediaToAI(mediaId, mediaType) {
     // 상태 업데이트
     if (response.data && response.data.status && response.data.status !== STATUS.NORMAL) {
       currentStatus = response.data.status;
+      currentStatusJobId = jobId;
       database.addAlert(currentStatus, {
         ...response.data,
         jobId,
-        mediaId,
-        mediaType
+        imageId
       });
     }
     
     return jobId;
   } catch (error) {
-    console.error('미디어 제출 오류:', error, mediaId, mediaType);
+    console.error('이미지 제출 오류:', error, imageId);
     return null;
   }
 }
@@ -196,41 +192,33 @@ app.get('/api/job-status/:jobId', async (req, res) => {
 
 // 현재 시스템 상태만 확인하는 폴링용 API (기존)
 app.get('/api/status', (req, res) => {
-  res.json({ 
-    status: currentStatus,
-    lastUpdated: database.getLastAlert()?.timestamp
+    const lastAlert = database.getLastAlert();
+    
+    res.json({ 
+      status: currentStatus,
+      jobId: currentStatusJobId,
+      lastUpdated: lastAlert?.timestamp,
+      details: currentStatusJobId ? {
+        job: database.getJobStatus(currentStatusJobId),
+        // 관련된 세부 정보가 필요하면 여기에 추가
+      } : null
+    });
   });
-});
 
-// 샘플 미디어 목록 조회 API
+// 이미지 목록 조회 API
 app.get('/api/media/list', (req, res) => {
     try {
-        const type = req.query.type || 'all'; // 이미지/비디오/모두
+        const imagesPath = path.join(MEDIA_PATH, 'images');
+        let images = [];
         
-        let files = {};
-        
-        if (type === 'all' || type === 'images') {
-            const imagesPath = path.join(MEDIA_PATH, 'images');
-            if (fs.existsSync(imagesPath)) {
-                files.images = fs.readdirSync(imagesPath);
-            } else {
-                files.images = [];
-            }
+        if (fs.existsSync(imagesPath)) {
+            images = fs.readdirSync(imagesPath);
         }
         
-        if (type === 'all' || type === 'videos') {
-            const videosPath = path.join(MEDIA_PATH, 'videos');
-            if (fs.existsSync(videosPath)) {
-                files.videos = fs.readdirSync(videosPath);
-            } else {
-                files.videos = [];
-            }
-        }
-        
-        res.json({ success: true, files });
+        res.json({ success: true, images });
     } catch (error) {
-        console.error('미디어 목록 조회 오류:', error);
-        res.status(500).json({ success: false, message: '미디어 목록 조회 중 오류가 발생했습니다' });
+        console.error('이미지 목록 조회 오류:', error);
+        res.status(500).json({ success: false, message: '이미지 목록 조회 중 오류가 발생했습니다' });
     }
 });
 
@@ -243,12 +231,29 @@ app.post('/api/media/upload', (req, res) => {
 
 // 상태 업데이트 API
 app.post('/api/update-status', async (req, res) => {
-    const { status } = req.body;
+    const { status, jobId } = req.body;
     
     if (Object.values(STATUS).includes(status)) {
         currentStatus = status;
-        console.log(`상태 업데이트: ${status}`);
-        res.json({ success: true, status: currentStatus });
+        
+        // jobId가 제공되면 사용, 아니면 생성
+        currentStatusJobId = jobId || `manual_${Date.now()}`;
+        
+        // 작업 상태 저장 (선택 사항)
+        database.updateJobStatus(currentStatusJobId, {
+          status: currentStatus,
+          startTime: new Date().toISOString(),
+          completedTime: new Date().toISOString(),
+          completed: true,
+          isManualUpdate: true
+        });
+        
+        console.log(`상태 업데이트: ${status}, jobId: ${currentStatusJobId}`);
+        res.json({ 
+          success: true, 
+          status: currentStatus,
+          jobId: currentStatusJobId
+        });
     } else {
         res.status(400).json({ success: false, message: '잘못된 상태값입니다' });
     }
@@ -257,7 +262,10 @@ app.post('/api/update-status', async (req, res) => {
 
 // 시뮬레이션을 위한 상태 변경 API (데모 테스트용)
 app.post('/api/simulate', (req, res) => {
-    const { event } = req.body;
+    const { event, simulationJobId } = req.body;
+    
+    // 시뮬레이션용 jobId 생성 또는 사용
+    const jobId = simulationJobId || `simulation_${Date.now()}`;
     
     switch (event) {
         case 'animal':
@@ -274,7 +282,23 @@ app.post('/api/simulate', (req, res) => {
             currentStatus = STATUS.NORMAL;
     }
     
-    res.json({ success: true, status: currentStatus });
+    // 현재 상태의 jobId 업데이트
+    currentStatusJobId = jobId;
+    
+    // 시뮬레이션 작업 상태 저장 (선택 사항)
+    database.updateJobStatus(jobId, {
+      status: currentStatus,
+      startTime: new Date().toISOString(),
+      completedTime: new Date().toISOString(),
+      completed: true,
+      isSimulation: true
+    });
+    
+    res.json({ 
+      success: true, 
+      status: currentStatus,
+      jobId: currentStatusJobId
+    });
 });
 
 // 서버 시작 시 모니터링 시작
