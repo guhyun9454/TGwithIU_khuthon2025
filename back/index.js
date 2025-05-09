@@ -164,12 +164,15 @@ async function submitMediaToAI(imagePath, category) {
     if (response.data && response.data.objects) {
       // 감지된 객체 목록
       const detectedObjects = response.data.objects;
-      
       // 동물 카테고리인 경우 동물 감지 확인
       if (category === 'animal') {
         // 감지된 객체 중 지정된 동물 클래스가 있는지 확인
         detectedAnimals = detectedObjects.filter(obj => animalClasses.includes(obj));
-        
+        console.log('===== 동물 감지 결과 =====');
+        console.log('파일:', imagePath);
+        console.log('감지된 객체들:', detectedObjects);
+        console.log('감지된 동물들:', detectedAnimals);
+        console.log('========================');
         // 감지된 동물이 있으면 animal_alert 상태로 설정
         if (detectedAnimals.length > 0) {
           detectedStatus = STATUS.ANIMAL_ALERT;
